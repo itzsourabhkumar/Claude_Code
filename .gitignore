@@ -1,0 +1,11 @@
+# Collected usage data and derived artefacts stay local.
+data/
+logs/
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/

@@ -1,0 +1,28 @@
+{
+  "store_prompt_text": true,
+  "prompt_text_max_chars": 8000,
+  "track_non_human_turns": true,
+
+  "paths": {
+    "usage_dir": "data/usage",
+    "state_dir": "data/state",
+    "index_path": "data/index.sqlite3",
+    "reports_dir": "reports",
+    "logs_dir": "logs"
+  },
+
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+
+  "project_detection": {
+    "use_git_root": true,
+    "cache_ttl_seconds": 86400,
+    "git_timeout_seconds": 3.0
+  },
+
+  "ignore_paths": [],
+
+  "hook_budget_seconds": 8.0
+}

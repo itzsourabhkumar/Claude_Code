@@ -1,0 +1,15 @@
+# Claude Code Token Usage Tracker
+#
+# The tracker, the API server, the CLI and the dashboard use the Python
+# standard library only. There is nothing to install to run the system - the
+# hook must be able to start under any interpreter, without a virtualenv, and
+# fewer moving parts means fewer ways to interfere with Claude Code.
+#
+# The dashboard likewise has no JavaScript dependencies: charts are drawn as
+# inline SVG, so it works offline and needs no CDN.
+#
+# Only the test suite needs anything extra:
+#
+#     pip install -r requirements.txt
+#
+pytest>=7.0

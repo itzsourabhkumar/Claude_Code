@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Claude Code Token Usage</title>
+  <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232a78d6'/><text x='16' y='23' font-size='19' font-family='system-ui' font-weight='700' fill='white' text-anchor='middle'>C</text></svg>">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ------------------------------------------------------------ header -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">C</div>
+      <div>
+        <h1>Claude Code Token Usage</h1>
+        <p class="sub" id="meta-line">Local usage tracker</p>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <span class="updated">
+        <span class="status-dot" id="status-dot"></span>
+        <span>Last Updated: <span id="last-updated">&mdash;</span></span>
+      </span>
+      <button class="btn small" id="theme-toggle" type="button" title="Switch light / dark">Theme</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" role="status"></div>
+
+  <!-- ------------------------------------------------------- summary cards -->
+  <section class="cards" aria-label="Usage summary">
+    <div class="card">
+      <div class="label">Total Prompts</div>
+      <div class="value" id="c-prompts">&mdash;</div>
+      <div class="foot" id="c-prompts-foot">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="label">Input Tokens</div>
+      <div class="value" id="c-input">&mdash;</div>
+      <div class="foot" id="c-input-foot">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="label">Output Tokens</div>
+      <div class="value" id="c-output">&mdash;</div>
+      <div class="foot" id="c-output-foot">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="label">Cache Tokens</div>
+      <div class="value" id="c-cache">&mdash;</div>
+      <div class="foot" id="c-cache-foot">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="label">Total Tokens</div>
+      <div class="value" id="c-total">&mdash;</div>
+      <div class="foot" id="c-total-foot">&nbsp;</div>
+    </div>
+    <div class="card">
+      <div class="label">Projects Used</div>
+      <div class="value" id="c-projects">&mdash;</div>
+      <div class="foot" id="c-projects-foot">&nbsp;</div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ filters -->
+  <section class="panel" aria-label="Filters">
+    <div class="panel-head">
+      <h2>Filters</h2>
+      <span class="hint" id="filter-summary">All time</span>
+    </div>
+
+    <div class="quick-row" id="quick-ranges" role="group" aria-label="Date quick filters">
+      <button class="btn small" type="button" data-range="today">Today</button>
+      <button class="btn small" type="button" data-range="yesterday">Yesterday</button>
+      <button class="btn small" type="button" data-range="last7">Last 7 Days</button>
+      <button class="btn small" type="button" data-range="last30">Last 30 Days</button>
+      <button class="btn small" type="button" data-range="this_month">This Month</button>
+      <button class="btn small" type="button" data-range="previous_month">Previous Month</button>
+      <button class="btn small" type="button" data-range="this_year">This Year</button>
+      <button class="btn small" type="button" data-range="all" aria-pressed="true">All Time</button>
+    </div>
+
+    <div class="filter-grid">
+      <div class="field">
+        <label for="f-from">Date From</label>
+        <input type="date" id="f-from">
+      </div>
+      <div class="field">
+        <label for="f-to">Date To</label>
+        <input type="date" id="f-to">
+      </div>
+      <div class="field">
+        <label for="f-year">Year</label>
+        <select id="f-year"><option value="all">All Years</option></select>
+      </div>
+      <div class="field">
+        <label for="f-month">Month</label>
+        <select id="f-month"><option value="all">All Months</option></select>
+      </div>
+      <div class="field">
+        <label for="f-project">Project</label>
+        <select id="f-project"><option value="all">All Projects</option></select>
+      </div>
+      <div class="field">
+        <label for="f-model">Model</label>
+        <select id="f-model"><option value="all">All Models</option></select>
+      </div>
+      <div class="field">
+        <label for="f-search">Search Prompt</label>
+        <input type="search" id="f-search" placeholder="e.g. ClickHouse" autocomplete="off">
+      </div>
+    </div>
+
+    <div class="filter-actions">
+      <button class="btn primary" id="btn-apply" type="button">Apply Filters</button>
+      <button class="btn" id="btn-reset" type="button">Reset Filters</button>
+      <button class="btn" id="btn-refresh" type="button">Refresh Data</button>
+      <span class="spacer"></span>
+      <span class="auto-refresh">
+        <button class="btn small" id="btn-auto" type="button" aria-pressed="false">Auto Refresh: OFF</button>
+        <label class="sr-only" for="f-interval">Auto refresh interval</label>
+        <select id="f-interval">
+          <option value="30">30 seconds</option>
+          <option value="60" selected>1 minute</option>
+          <option value="300">5 minutes</option>
+        </select>
+      </span>
+      <button class="btn" id="btn-csv" type="button">Export CSV</button>
+      <button class="btn" id="btn-json" type="button">Export JSON</button>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------- charts -->
+  <div class="chart-grid">
+    <section class="panel" aria-label="Daily token usage">
+      <div class="panel-head">
+        <h2>Daily Token Usage</h2>
+        <div class="seg" id="daily-metric" role="group" aria-label="Daily chart metric">
+          <button type="button" data-metric="total_tokens" aria-pressed="true">Total</button>
+          <button type="button" data-metric="input_tokens" aria-pressed="false">Input</button>
+          <button type="button" data-metric="output_tokens" aria-pressed="false">Output</button>
+          <button type="button" data-metric="cache_tokens" aria-pressed="false">Cache</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="daily-chart"></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Token usage by project">
+      <div class="panel-head">
+        <h2>Token Usage by Project</h2>
+        <div class="seg" id="project-metric" role="group" aria-label="Project chart metric">
+          <button type="button" data-metric="total_tokens" aria-pressed="true">Total</button>
+          <button type="button" data-metric="input_tokens" aria-pressed="false">Input</button>
+          <button type="button" data-metric="output_tokens" aria-pressed="false">Output</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="project-chart"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ---------------------------------------------------- project summary -->
+  <section class="panel" aria-label="Project summary">
+    <div class="panel-head">
+      <h2>Project Summary</h2>
+      <span class="hint">Click a project name to filter the dashboard by it</span>
+    </div>
+    <div class="table-scroll">
+      <table id="project-table">
+        <thead>
+          <tr>
+            <th class="sortable" data-sort="project">Project</th>
+            <th class="num sortable" data-sort="prompts">Prompts</th>
+            <th class="num sortable" data-sort="input_tokens">Input</th>
+            <th class="num sortable" data-sort="output_tokens">Output</th>
+            <th class="num sortable" data-sort="cache_tokens">Cache</th>
+            <th class="num sortable" data-sort="total_tokens" data-dir="desc">Total</th>
+            <th class="num">% of Usage</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------- prompt history -->
+  <section class="panel" aria-label="Prompt history">
+    <div class="panel-head">
+      <h2>Prompt History</h2>
+      <span class="hint" id="history-hint">Every tracked interaction</span>
+    </div>
+    <div class="table-scroll">
+      <table id="prompt-table">
+        <thead>
+          <tr>
+            <th class="sortable" data-sort="timestamp" data-dir="desc">Timestamp</th>
+            <th class="sortable" data-sort="project">Project</th>
+            <th>Branch</th>
+            <th class="sortable" data-sort="model">Model</th>
+            <th>Prompt</th>
+            <th class="num sortable" data-sort="input_tokens">Input</th>
+            <th class="num sortable" data-sort="output_tokens">Output</th>
+            <th class="num sortable" data-sort="cache_tokens">Cache</th>
+            <th class="num sortable" data-sort="total_tokens">Total</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <span class="rows">
+        <label for="f-per-page">Rows per page:</label>
+        <select id="f-per-page">
+          <option value="25" selected>25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="250">250</option>
+        </select>
+      </span>
+      <span class="count" id="page-count">&mdash;</span>
+      <span class="spacer"></span>
+      <button class="btn small" id="btn-prev" type="button">Previous</button>
+      <span class="pages" id="page-buttons"></span>
+      <button class="btn small" id="btn-next" type="button">Next</button>
+    </div>
+  </section>
+
+  <footer>
+    <span>Data read from local JSONL files &mdash; nothing leaves this machine.</span>
+    <span id="footer-meta"></span>
+  </footer>
+</div>
+
+<div class="tooltip" id="tooltip" role="tooltip" aria-hidden="true"></div>
+
+<script src="js/dashboard.js"></script>
+</body>
+</html>
