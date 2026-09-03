@@ -3,9 +3,13 @@
 Serves the static dashboard plus a small read-only JSON API over the SQLite
 index. It binds to 127.0.0.1 only and is never reachable from the network.
 
-    python server.py            # http://127.0.0.1:8765
+    python server.py            # http://127.0.0.1:8765   (python3 on Linux/macOS)
     python server.py --port 9000
     python server.py --no-browser
+
+The convenience launchers (``start_dashboard.bat`` / ``start_dashboard.ps1`` on
+Windows, ``start_dashboard.sh`` on Linux and macOS) do nothing but run this file
+with the project's interpreter, so behaviour is identical on all three.
 
 Endpoints
 ---------
@@ -43,13 +47,21 @@ from urllib.parse import parse_qs, unquote, urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tracker import TRACKER_VERSION  # noqa: E402
-from tracker.config import load_config  # noqa: E402
+from tracker.config import InvalidConfig, load_config  # noqa: E402
 from tracker.database import Database  # noqa: E402
+from tracker.platform_utils import (  # noqa: E402
+    describe_platform,
+    is_loopback_host,
+    port_is_free,
+    python_command_name,
+)
 from tracker.query import build_filters, normalise_totals, with_percentages  # noqa: E402
 from tracker.utils import get_logger, now_local  # noqa: E402
 
-#: Never widen this. The dashboard is a local tool and exposes prompt text.
-BIND_HOST = "127.0.0.1"
+#: Fallback bind address. Any configured or requested host is checked against
+#: :func:`is_loopback_host` before it is used - the dashboard exposes prompt text
+#: and has no authentication, so it must never be reachable from the network.
+DEFAULT_BIND_HOST = "127.0.0.1"
 
 DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
 
@@ -234,6 +246,12 @@ class Handler(BaseHTTPRequestHandler):
                 "total_interactions": summary.get("prompts") or 0,
                 "first_date": summary.get("first_date"),
                 "last_date": summary.get("last_date"),
+                # Defaults the dashboard adopts on first load; the page's own
+                # controls still win for the rest of the visit.
+                "auto_refresh_seconds": STATE.config.auto_refresh_seconds,
+                "page_size": STATE.config.page_size,
+                "timezone": STATE.config.timezone,
+                "platform": describe_platform()["os"],
             })
 
         elif route == "/api/refresh":
@@ -284,24 +302,72 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
+def resolve_bind_host(requested: str | None, config) -> str:
+    """The address to bind, refusing anything reachable from the network."""
+    if requested:
+        if not is_loopback_host(requested):
+            raise InvalidConfig(
+                "--host %s is not a loopback address. The dashboard serves your "
+                "prompt text with no authentication, so it may only bind to "
+                "127.0.0.1, ::1 or localhost." % requested
+            )
+        return requested
+    try:
+        return config.host
+    except InvalidConfig as exc:
+        raise InvalidConfig(str(exc)) from None
+
+
 def main(argv: List[str] | None = None) -> int:
     global STATE
 
     config = load_config()
-    parser = argparse.ArgumentParser(description="Claude Code usage dashboard (localhost only)")
-    parser.add_argument("--port", type=int, default=config.port)
+    parser = argparse.ArgumentParser(
+        description="Claude Code usage dashboard (localhost only)"
+    )
+    parser.add_argument("--port", type=int, default=None,
+                        help="port to listen on (default: config.json server.port)")
+    parser.add_argument("--host", default=None,
+                        help="loopback address to bind (default: config.json server.host)")
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser")
     parser.add_argument("--reindex", action="store_true", help="rebuild the index before serving")
     args = parser.parse_args(argv)
 
+    try:
+        host = resolve_bind_host(args.host, config)
+    except InvalidConfig as exc:
+        print("Configuration error: %s" % exc, file=sys.stderr)
+        return 2
+    port = args.port if args.port is not None else config.port
+
+    config.ensure_directories()
     STATE = _State(config)
     if args.reindex or STATE.db.is_empty():
         stats = STATE.db.reindex(config.usage_dir, full=args.reindex)
         print("Indexed %d record(s) from %d file(s)." % (stats["records"], stats["files"]))
 
-    httpd = ThreadingHTTPServer((BIND_HOST, args.port), Handler)
+    # Checked up front so a busy port produces one clear line rather than a
+    # traceback - the most common first-run problem on every platform.
+    if not port_is_free(host, port):
+        print(
+            "Port %d on %s is already in use.\n"
+            "  Another dashboard may already be running - open http://%s:%d\n"
+            "  Otherwise start this one on a free port:  %s server.py --port %d"
+            % (port, host, host, port, python_command_name(), port + 1),
+            file=sys.stderr,
+        )
+        STATE.close()
+        return 1
+
+    try:
+        httpd = ThreadingHTTPServer((host, port), Handler)
+    except OSError as exc:
+        print("Could not start the dashboard on %s:%d - %s" % (host, port, exc),
+              file=sys.stderr)
+        STATE.close()
+        return 1
     httpd.daemon_threads = True
-    url = "http://%s:%d" % (BIND_HOST, args.port)
+    url = "http://%s:%d" % (host, port)
 
     print("Claude Code Token Usage dashboard")
     print("  serving : " + url)
@@ -309,8 +375,11 @@ def main(argv: List[str] | None = None) -> int:
     print("  index   : " + str(config.index_path))
     print("  press Ctrl+C to stop")
 
-    if not args.no_browser and os.environ.get("CCTRACKER_NO_BROWSER") != "1":
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    open_browser = config.open_browser and not args.no_browser
+    if open_browser and os.environ.get("CCTRACKER_NO_BROWSER") != "1":
+        # webbrowser picks the right mechanism per platform (start / open /
+        # xdg-open) and simply does nothing on a headless box.
+        threading.Timer(0.6, lambda: _open_browser_quietly(url)).start()
 
     try:
         httpd.serve_forever()
@@ -320,6 +389,14 @@ def main(argv: List[str] | None = None) -> int:
         httpd.server_close()
         STATE.close()
     return 0
+
+
+def _open_browser_quietly(url: str) -> None:
+    """Open a browser, ignoring the failure headless machines produce."""
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

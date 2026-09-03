@@ -1,29 +1,39 @@
 <#
 .SYNOPSIS
-    Remove the Claude Code token-tracking hooks.
+    Remove the Claude Code token-tracking hooks on Windows.
 
 .DESCRIPTION
-    Removes only the hook entries this project installed - identified by their
-    --cctracker marker. Any other hooks you have configured, and every other
-    setting in the file, are left exactly as they were. The settings file is
-    backed up before the change.
+    A convenience wrapper around scripts/uninstall_hooks.py, which is the real,
+    cross-platform implementation.
 
-    Usage data already collected under data/ is NOT deleted; remove that folder
-    yourself if you also want the history gone.
+    Only the hook entries this project installed - identified by their
+    --cctracker marker - are removed. Any other hooks you have configured, and
+    every other setting in the file, are left exactly as they were, and the
+    settings file is backed up before the change.
+
+    Usage data already collected under data\ is NOT deleted unless -PurgeData is
+    given.
 
 .PARAMETER SettingsPath
-    Settings file to modify. Defaults to ~/.claude/settings.json.
+    Settings file to modify. Defaults to Claude Code's own.
 
 .PARAMETER Python
     Python interpreter to run the uninstall with.
 
+.PARAMETER PurgeData
+    Also delete the collected usage data, reports and logs (asks first).
+
 .EXAMPLE
     .\scripts\uninstall_hooks.ps1
+
+.EXAMPLE
+    .\scripts\uninstall_hooks.ps1 -PurgeData
 #>
 [CmdletBinding()]
 param(
     [string] $SettingsPath,
-    [string] $Python
+    [string] $Python,
+    [switch] $PurgeData
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,12 +59,9 @@ function Resolve-Python {
 
 $python = Resolve-Python -Explicit $Python
 
-Write-Host ''
-Write-Host 'Claude Code Token Usage Tracker - hook removal' -ForegroundColor Cyan
-Write-Host ''
-
-$uninstallArgs = @('-m', 'tracker.hooks', 'uninstall')
+$uninstallArgs = @((Join-Path $root 'scripts\uninstall_hooks.py'))
 if ($SettingsPath) { $uninstallArgs += @('--settings', $SettingsPath) }
+if ($PurgeData)    { $uninstallArgs += '--purge-data' }
 
 Push-Location $root
 try {
@@ -64,7 +71,3 @@ try {
 finally {
     Pop-Location
 }
-
-Write-Host ''
-Write-Host 'Hooks removed. Collected usage data under data\ was left untouched.' -ForegroundColor Green
-Write-Host ''

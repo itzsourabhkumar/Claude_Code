@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -65,8 +66,73 @@ def get_logger(name: str, logs_dir: Optional[Path] = None) -> logging.Logger:
 # --------------------------------------------------------------------------
 # Time
 # --------------------------------------------------------------------------
+#: Timezone used for calendar bucketing, set once by ``config.load_config``.
+_TIMEZONE_SPEC = "local"
+_TIMEZONE_RESOLVED: Optional[_dt.tzinfo] = None
+
+_OFFSET_PATTERN = re.compile(r"^(?P<sign>[+-])(?P<h>\d{1,2}):?(?P<m>\d{2})?$")
+
+
+def set_timezone(spec: Optional[str]) -> None:
+    """Choose the timezone days are bucketed in.
+
+    ``"local"`` (the default) follows the machine. Anything else is resolved
+    once and cached; see :func:`resolve_timezone` for the accepted forms.
+    """
+    global _TIMEZONE_SPEC, _TIMEZONE_RESOLVED
+    normalised = (spec or "local").strip() or "local"
+    if normalised != _TIMEZONE_SPEC:
+        _TIMEZONE_SPEC = normalised
+        _TIMEZONE_RESOLVED = None
+
+
+def resolve_timezone(spec: Optional[str]) -> Optional[_dt.tzinfo]:
+    """Turn a config timezone string into a tzinfo, or None to follow the machine.
+
+    Three forms are accepted, in this order:
+
+    * ``local`` / empty - follow the machine's own timezone;
+    * a fixed offset such as ``+05:30``, ``-08:00`` or ``UTC`` - works on every
+      platform with no extra packages;
+    * an IANA name such as ``Asia/Kolkata`` - needs a timezone database, which
+      Linux and macOS ship but Windows does not (``pip install tzdata`` adds it).
+
+    An unresolvable value falls back to the machine's timezone rather than
+    raising, because this runs inside a Claude Code hook.
+    """
+    text = (spec or "local").strip()
+    if not text or text.lower() == "local":
+        return None
+    if text.upper() in ("UTC", "Z", "GMT"):
+        return _dt.timezone.utc
+
+    match = _OFFSET_PATTERN.match(text)
+    if match:
+        hours = int(match.group("h"))
+        minutes = int(match.group("m") or 0)
+        if hours <= 23 and minutes <= 59:
+            delta = _dt.timedelta(hours=hours, minutes=minutes)
+            return _dt.timezone(-delta if match.group("sign") == "-" else delta)
+
+    try:
+        from zoneinfo import ZoneInfo  # stdlib on 3.9+
+
+        return ZoneInfo(text)
+    except Exception:
+        return None
+
+
 def local_timezone() -> _dt.tzinfo:
-    """The machine's current local timezone as a fixed-offset tzinfo."""
+    """The timezone calendar days are bucketed in.
+
+    Defaults to the machine's own timezone, which is what makes a day in the
+    dashboard match the user's actual working day.
+    """
+    global _TIMEZONE_RESOLVED
+    if _TIMEZONE_RESOLVED is None:
+        _TIMEZONE_RESOLVED = resolve_timezone(_TIMEZONE_SPEC)
+    if _TIMEZONE_RESOLVED is not None:
+        return _TIMEZONE_RESOLVED
     return _dt.datetime.now().astimezone().tzinfo or _dt.timezone.utc
 
 

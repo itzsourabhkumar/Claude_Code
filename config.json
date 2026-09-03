@@ -1,9 +1,15 @@
 {
+  "//": "All paths are relative to this file's directory and use '/' separators, which Python resolves correctly on Windows, Linux and macOS. Absolute paths are also accepted. See README section 12 for every option.",
+
   "store_prompt_text": true,
   "prompt_text_max_chars": 8000,
   "track_non_human_turns": true,
 
+  "//timezone": "'local' follows the machine. A fixed offset such as '+05:30' works everywhere; an IANA name such as 'Asia/Kolkata' needs a timezone database (built in on Linux/macOS, 'pip install tzdata' on Windows).",
+  "timezone": "local",
+
   "paths": {
+    "data_dir": "data",
     "usage_dir": "data/usage",
     "state_dir": "data/state",
     "index_path": "data/index.sqlite3",
@@ -11,9 +17,16 @@
     "logs_dir": "logs"
   },
 
+  "//server": "host must be a loopback address; the dashboard serves prompt text and has no authentication, so anything else is refused at startup.",
   "server": {
     "host": "127.0.0.1",
-    "port": 8765
+    "port": 8765,
+    "open_browser": true
+  },
+
+  "dashboard": {
+    "auto_refresh_seconds": 0,
+    "page_size": 25
   },
 
   "project_detection": {
@@ -22,6 +35,7 @@
     "git_timeout_seconds": 3.0
   },
 
+  "//ignore_paths": "Glob patterns, written with '/' separators on every platform, e.g. ['*/client-confidential', 'D:/Scratch/*', '/home/me/scratch/*'].",
   "ignore_paths": [],
 
   "hook_budget_seconds": 8.0

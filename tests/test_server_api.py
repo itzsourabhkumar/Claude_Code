@@ -72,10 +72,39 @@ def api(seeded, monkeypatch):
 
 
 class TestBinding:
-    def test_the_server_only_ever_binds_to_loopback(self):
+    """The dashboard serves prompt text, so the bind address is validated,
+    never merely defaulted - on every platform."""
+
+    def test_the_default_bind_address_is_loopback(self):
         import server as server_module
 
-        assert server_module.BIND_HOST == "127.0.0.1"
+        assert server_module.DEFAULT_BIND_HOST == "127.0.0.1"
+
+    def test_config_host_falls_back_to_loopback(self, config):
+        import server as server_module
+
+        assert server_module.resolve_bind_host(None, config) == "127.0.0.1"
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+    def test_loopback_addresses_are_accepted(self, host, config):
+        import server as server_module
+
+        assert server_module.resolve_bind_host(host, config) == host
+
+    @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "::", "example.com"])
+    def test_a_reachable_address_is_refused(self, host, config):
+        import server as server_module
+        from tracker.config import InvalidConfig
+
+        with pytest.raises(InvalidConfig):
+            server_module.resolve_bind_host(host, config)
+
+    def test_a_reachable_host_in_config_is_refused(self, config):
+        from tracker.config import InvalidConfig
+
+        config.data["server"]["host"] = "0.0.0.0"
+        with pytest.raises(InvalidConfig):
+            _ = config.host
 
 
 class TestEndpoints:

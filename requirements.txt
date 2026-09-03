@@ -1,15 +1,47 @@
-# Claude Code Token Usage Tracker
+# Claude Code Token Usage Tracker - dependencies
+# ==============================================================================
 #
-# The tracker, the API server, the CLI and the dashboard use the Python
-# standard library only. There is nothing to install to run the system - the
-# hook must be able to start under any interpreter, without a virtualenv, and
-# fewer moving parts means fewer ways to interfere with Claude Code.
+# RUNTIME: NONE.
+#
+# The tracker, the API server, the CLI and the dashboard use the Python standard
+# library only, on every operating system. There is nothing to install to run
+# the system, and that is deliberate: the hook must be able to start under any
+# interpreter, without a virtualenv, and fewer moving parts means fewer ways to
+# interfere with Claude Code.
 #
 # The dashboard likewise has no JavaScript dependencies: charts are drawn as
 # inline SVG, so it works offline and needs no CDN.
 #
-# Only the test suite needs anything extra:
+# ------------------------------------------------------------------------------
+# Supported Python
+# ------------------------------------------------------------------------------
+#   Minimum   : 3.9
+#   Recommended : 3.11 or newer
+#   Verified on : 3.14.6 (Windows 11)
 #
-#     pip install -r requirements.txt
+# ------------------------------------------------------------------------------
+# System requirements
+# ------------------------------------------------------------------------------
+#   Python      3.9+          required   (3.11+ recommended)
+#   Claude Code any version    required   the thing being tracked
+#   Git         any version    optional   improves project detection; without it
+#                                         the working directory name is used
+#   Ubuntu/Debian also needs python3-venv to create a virtualenv:
+#       sudo apt install python3 python3-venv git
 #
-pytest>=7.0
+# ------------------------------------------------------------------------------
+# Install (test suite only)
+# ------------------------------------------------------------------------------
+#   Windows       python  -m pip install -r requirements.txt
+#   Linux/macOS   python3 -m pip install -r requirements.txt
+#
+pytest>=7.0,<9.0
+
+# ------------------------------------------------------------------------------
+# Optional
+# ------------------------------------------------------------------------------
+# Only needed if you set an IANA timezone name (e.g. "Asia/Kolkata") in
+# config.json ON WINDOWS. Linux and macOS ship a timezone database already, and
+# a fixed offset such as "+05:30" needs nothing anywhere. Uncomment to install:
+#
+#tzdata>=2024.1 ; sys_platform == "win32"

@@ -1,0 +1,36 @@
+# Line endings.
+#
+# This matters more than it looks. Git on Windows commonly has core.autocrlf=true,
+# which would check the shell scripts out with CRLF endings - and a CRLF after
+# "#!/bin/sh" makes a script unrunnable on Linux and macOS ("bad interpreter").
+# Pinning the endings per file type here means a clone behaves identically on all
+# three operating systems, whatever the user's git configuration says.
+
+# Default: normalise text in the repository, let git pick the working-tree form.
+* text=auto
+
+# Must be LF everywhere, including in a Windows working tree.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.json      text eol=lf
+*.jsonl     text eol=lf
+*.md        text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.js        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+.env.example   text eol=lf
+
+# Windows-only scripts: CRLF, which is what cmd.exe and PowerShell expect.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# Never touched.
+*.sqlite3   binary
+*.png       binary
+*.jpg       binary
+*.ico       binary

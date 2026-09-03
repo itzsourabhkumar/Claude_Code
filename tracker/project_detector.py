@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from .platform_utils import find_git_executable, is_windows
 from .utils import read_json, write_json_atomic
 
 # Characters Windows forbids in a path component, plus separators.
@@ -48,11 +49,37 @@ def sanitize_project_name(name: str) -> str:
     return cleaned[:120]
 
 
+#: A path that only Windows could have produced: "D:\...", "D:/..." or a UNC
+#: share. Recognising these is what lets a Linux dashboard read data collected on
+#: Windows without mistaking a drive letter for a directory name.
+_WINDOWS_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]?|\\\\)")
+
+
+def _looks_like_windows_path(text: str) -> bool:
+    return bool(_WINDOWS_PATH.match(text))
+
+
+def normalise_separators(path: str) -> str:
+    """Rewrite ``\\`` as ``/`` only where a backslash really is a separator.
+
+    On Windows it always is. On Linux and macOS a backslash is a perfectly legal
+    character *inside* a filename, so it is only treated as a separator when the
+    string is recognisably a Windows path - which happens whenever the dashboard
+    or a report reads data that was collected on a Windows machine.
+    """
+    text = str(path or "")
+    if not text:
+        return ""
+    if is_windows() or _looks_like_windows_path(text):
+        return text.replace("\\", "/")
+    return text
+
+
 def _basename(path: str) -> str:
     """Directory name of ``path``, handling trailing separators and drive roots."""
     if not path:
         return ""
-    text = str(path).replace("\\", "/").rstrip("/")
+    text = normalise_separators(path).rstrip("/")
     if not text:
         return ""
     # A bare drive root such as "D:" has no meaningful project name.
@@ -69,9 +96,14 @@ def git_root(cwd: str, timeout: float = 3.0) -> Optional[str]:
     """
     if not cwd or not os.path.isdir(cwd):
         return None
+    git = find_git_executable()
+    if git is None:
+        # Git is optional: without it every project falls back to its working
+        # directory name, which is correct, just less clever.
+        return None
     try:
         proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            [git, "rev-parse", "--show-toplevel"],
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -120,9 +152,9 @@ class ProjectDetector:
     # ---------------------------------------------------------------- api
     def is_ignored(self, cwd: str) -> bool:
         patterns = self.config.get("ignore_paths", default=[]) or []
-        normalised = str(cwd or "").replace("\\", "/")
+        normalised = normalise_separators(cwd)
         for pattern in patterns:
-            pat = str(pattern).replace("\\", "/")
+            pat = normalise_separators(pattern)
             if normalised == pat or fnmatch.fnmatch(normalised, pat):
                 return True
         return False
@@ -138,7 +170,9 @@ class ProjectDetector:
         if not cwd:
             return "unknown-project", None
 
-        key = os.path.normcase(cwd.replace("\\", "/").rstrip("/"))
+        # normcase folds case on Windows (where paths are case-insensitive)
+        # and is the identity on Linux and macOS, which is exactly right.
+        key = os.path.normcase(normalise_separators(cwd).rstrip("/"))
         entry = self._cache.get(key)
         if isinstance(entry, dict) and (time.time() - entry.get("at", 0)) < self.ttl:
             return entry.get("project") or "unknown-project", entry.get("git_root")

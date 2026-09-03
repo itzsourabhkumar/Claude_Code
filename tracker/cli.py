@@ -1,5 +1,8 @@
 """Command-line interface.
 
+The same commands work on Windows, Linux and macOS; only the name of the
+interpreter differs (``python`` on Windows, ``python3`` on Linux and macOS).
+
     python -m tracker.cli today
     python -m tracker.cli yesterday
     python -m tracker.cli month
@@ -28,7 +31,12 @@ if __name__ == "__main__" and __package__ in (None, ""):  # allow `python cli.py
 
 from . import TRACKER_VERSION
 from .collector import Collector
-from .config import load_config
+from .config import InvalidConfig, load_config
+from .platform_utils import (
+    dashboard_launcher,
+    describe_platform,
+    python_command_name,
+)
 from .database import open_database
 from .parser import iter_transcripts
 from .query import build_filters, normalise_totals, resolve_range
@@ -214,18 +222,28 @@ def cmd_reindex(args, config) -> int:
 
 
 def cmd_status(args, config) -> int:
+    """Installation and data health, including everything platform-dependent."""
     from .hooks import describe_installation
 
     with open_database(config) as db:
         summary = normalise_totals(db.summary({}))
         projects = db.distinct("project")
 
+    env = describe_platform(config.root)
+
     print()
     print("Claude Code Token Usage Tracker v" + TRACKER_VERSION)
+    print()
+    print("  os              : %s (%s)" % (env["os"], env["platform"]))
+    print("  python          : %s" % env["python"])
+    print("  git             : " + str(env["git_executable"]))
+    print("  claude cli      : " + str(env["claude_executable"]))
     print()
     print("  root            : " + str(config.root))
     print("  usage data      : " + str(config.usage_dir))
     print("  index           : " + str(config.index_path))
+    print("  logs            : " + str(config.logs_dir))
+    print("  timezone        : " + config.timezone)
     print("  store prompts   : " + ("yes" if config.store_prompt_text else "no (hash only)"))
     print()
     print("  interactions    : " + _fmt(summary.get("prompts")))
@@ -237,7 +255,13 @@ def cmd_status(args, config) -> int:
     for line in describe_installation():
         print("  " + line)
     print()
-    print("  dashboard       : http://127.0.0.1:%d  (run start_dashboard.bat)" % config.port)
+    try:
+        host = config.host
+    except InvalidConfig as exc:
+        print("  dashboard       : misconfigured - %s" % exc)
+    else:
+        print("  dashboard       : http://%s:%d  (%s, or %s server.py)"
+              % (host, config.port, dashboard_launcher(), python_command_name()))
     print()
     return 0
 
@@ -322,10 +346,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config()
+    config.ensure_directories()
     for attr in ("date_from", "date_to", "range"):
         if not hasattr(args, attr):
             setattr(args, attr, None)
-    return args.func(args, config)
+    try:
+        return args.func(args, config)
+    except InvalidConfig as exc:
+        print("Configuration error: %s" % exc, file=sys.stderr)
+        return 2
+    except PermissionError as exc:
+        print("Permission denied: %s\n"
+              "Check that you can write to %s" % (exc, config.data_dir), file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

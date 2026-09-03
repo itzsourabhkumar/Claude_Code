@@ -24,14 +24,13 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import os
 import shutil
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .collector import HOOK_EVENTS
 from .config import ROOT
+from . import platform_utils
 from .utils import now_local, read_json, write_json_atomic
 
 #: Marker that identifies a hook entry as belonging to this tracker.
@@ -43,10 +42,13 @@ HOOK_TIMEOUT = 20
 
 
 def claude_settings_path() -> Path:
-    """``~/.claude/settings.json``, honouring ``CLAUDE_CONFIG_DIR``."""
-    base = os.environ.get("CLAUDE_CONFIG_DIR")
-    root = Path(base) if base else Path(os.path.expanduser("~")) / ".claude"
-    return root / "settings.json"
+    """The user-level ``settings.json``.
+
+    ``~/.claude/settings.json`` on Windows, Linux and macOS alike, relocatable
+    with ``CLAUDE_CONFIG_DIR`` on all three - see ``tracker.platform_utils``,
+    which owns every OS-dependent location in this project.
+    """
+    return platform_utils.claude_settings_path()
 
 
 def python_executable() -> str:
@@ -56,15 +58,7 @@ def python_executable() -> str:
     activated the venv, so the absolute interpreter path is baked into the
     command rather than relying on ``PATH``.
     """
-    for candidate in (
-        ROOT / ".venv" / "Scripts" / "python.exe",
-        ROOT / ".venv" / "bin" / "python",
-        ROOT / "venv" / "Scripts" / "python.exe",
-        ROOT / "venv" / "bin" / "python",
-    ):
-        if candidate.is_file():
-            return str(candidate)
-    return sys.executable or "python"
+    return platform_utils.python_executable(ROOT)
 
 
 def hook_script_path() -> Path:
@@ -72,10 +66,19 @@ def hook_script_path() -> Path:
 
 
 def build_command(python_exe: Optional[str] = None, script: Optional[Path] = None) -> str:
-    """The shell command Claude Code will run for each hook event."""
-    exe = (python_exe or python_executable()).replace("\\", "/")
-    target = str(script or hook_script_path()).replace("\\", "/")
-    return '"%s" "%s" %s' % (exe, target, MARKER)
+    """The shell command Claude Code will run for each hook event.
+
+    Claude Code runs hook commands through the platform's own shell, so both the
+    separator style and the quoting are platform-dependent; both decisions live
+    in ``platform_utils`` rather than being spelled out here.
+    """
+    exe = platform_utils.normalise_hook_path(python_exe or python_executable())
+    target = platform_utils.normalise_hook_path(script or hook_script_path())
+    return "%s %s %s" % (
+        platform_utils.quote_hook_arg(exe),
+        platform_utils.quote_hook_arg(target),
+        MARKER,
+    )
 
 
 def is_ours(entry: Any) -> bool:
@@ -278,11 +281,16 @@ def installed_events(path: Optional[Path] = None) -> List[str]:
 def describe_installation() -> List[str]:
     path = claude_settings_path()
     events = installed_events(path)
-    lines = ["settings file   : " + str(path)]
+    lines = [
+        "platform        : %s" % platform_utils.os_label(),
+        "settings file   : " + str(path),
+    ]
     if events:
         lines.append("hooks installed : " + ", ".join(events))
     else:
-        lines.append("hooks installed : NO  (run scripts/install_hooks.ps1)")
+        lines.append(
+            "hooks installed : NO  (run %s)" % platform_utils.install_command()
+        )
     lines.append("hook command    : " + build_command())
     return lines
 
