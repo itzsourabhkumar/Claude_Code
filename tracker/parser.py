@@ -20,7 +20,6 @@ time.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -338,10 +337,13 @@ def iter_transcripts(projects_dir: Optional[Path] = None) -> Iterable[Path]:
     """Yield every Claude Code transcript on this machine.
 
     Claude Code keeps one directory per working directory under
-    ``~/.claude/projects``; the directory name is a slug, which is why the
-    tracker reads ``cwd`` out of the records themselves instead of the slug.
+    ``~/.claude/projects`` (relocatable with ``CLAUDE_CONFIG_DIR``, on every
+    platform); the directory name is a slug, which is why the tracker reads
+    ``cwd`` out of the records themselves instead of the slug.
     """
-    base = Path(projects_dir or (Path(os.path.expanduser("~")) / ".claude" / "projects"))
+    from .platform_utils import claude_projects_dir
+
+    base = Path(projects_dir) if projects_dir else claude_projects_dir()
     if not base.is_dir():
         return []
     return sorted(base.glob("*/*.jsonl"))

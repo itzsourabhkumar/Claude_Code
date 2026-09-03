@@ -2,12 +2,16 @@
 REM ---------------------------------------------------------------------------
 REM Start the Claude Code token usage dashboard on http://127.0.0.1:8765
 REM
-REM Uses the project virtualenv when one exists, otherwise whatever Python is on
-REM PATH. The server binds to loopback only and needs no dependencies.
+REM A convenience wrapper: it uses the project virtualenv when one exists,
+REM otherwise whatever Python is on PATH, and runs server.py - the real
+REM implementation, identical on Windows, Linux and macOS. The server binds to
+REM loopback only and needs no dependencies.
 REM
 REM   start_dashboard.bat              start on the configured port
 REM   start_dashboard.bat --port 9000  start on another port
 REM   start_dashboard.bat --no-browser do not open a browser window
+REM
+REM Linux and macOS: use ./start_dashboard.sh instead.
 REM ---------------------------------------------------------------------------
 setlocal
 cd /d "%~dp0"
@@ -21,7 +25,7 @@ if not defined PYTHON set "PYTHON=python"
 if errorlevel 1 (
     echo.
     echo   Python was not found.
-    echo   Install Python 3.9+ or create a virtualenv in .venv, then try again.
+    echo   Install Python 3.11+ or create a virtualenv in .venv, then try again.
     echo.
     pause
     exit /b 1

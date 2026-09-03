@@ -1,11 +1,53 @@
-# Collected usage data and derived artefacts stay local.
+# ---------------------------------------------------------------------------
+# Collected usage data and derived artefacts stay local, and deliberately so.
+#
+# data/usage/**/prompts.jsonl contains YOUR PROMPT TEXT, working directory paths
+# and git branch names. That is project-sensitive information, so none of it is
+# ever committed - if you fork or share this repository, your usage history does
+# not travel with it. logs/ and reports/ are derived from the same data and are
+# excluded for the same reason. Everything under data/ except the raw JSONL can
+# be rebuilt at any time ("python -m tracker.cli reindex").
+#
+# To back the data up, copy the data/ directory yourself. See README section 17.
+# ---------------------------------------------------------------------------
 data/
 logs/
 reports/
 
+# Local, machine-specific configuration. config.json IS committed (it is the
+# portable default); these are the per-machine overrides.
+.env
+.env.*
+!.env.example
+config.local.json
+*.local.json
+
+# Runtime database files (the index is rebuildable from the JSONL tree).
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Claude Code settings backups, if one is ever taken inside this directory.
+settings.backup-cctracker-*.json
+
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 venv/
+env/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and OS clutter
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

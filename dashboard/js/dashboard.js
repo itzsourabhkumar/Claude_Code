@@ -604,6 +604,30 @@
     });
   }
 
+  /** localStorage is unavailable in some private-browsing modes. */
+  function stored(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+
+  /** The interpreter name to show in help text, per the server's platform. */
+  function pythonCommand(platform) {
+    return platform === "Windows" ? "python" : "python3";
+  }
+
+  function applyServerDefaults(meta) {
+    // Config supplies the defaults; anything the visitor has already chosen in
+    // this browser wins, so the two never fight.
+    if (meta.page_size && stored("cctracker.perPage") === null) {
+      state.perPage = Number(meta.page_size) || state.perPage;
+      $("f-per-page").value = String(state.perPage);
+    }
+    if (meta.auto_refresh_seconds && stored("cctracker.auto") === null) {
+      state.autoSeconds = Number(meta.auto_refresh_seconds) || state.autoSeconds;
+      $("f-interval").value = String(state.autoSeconds);
+      setAuto(true);
+    }
+  }
+
   function loadMeta() {
     return fetch("/api/meta").then(function (r) { return r.json(); }).then(function (meta) {
       var bits = [];
@@ -612,8 +636,10 @@
       $("meta-line").textContent = bits.length ? bits.join(" · ") : "Local usage tracker";
       $("footer-meta").textContent = "tracker v" + meta.tracker_version +
         (meta.last_date ? " · latest data " + meta.last_date : "");
+      applyServerDefaults(meta);
       if (!meta.total_interactions) {
-        banner("No usage recorded yet. Run: python -m tracker.cli backfill  " +
+        banner("No usage recorded yet. Run: " + pythonCommand(meta.platform) +
+               " -m tracker.cli backfill  " +
                "(imports existing Claude Code history), or start a Claude Code session.");
       }
     }).catch(function () { /* meta is cosmetic */ });
@@ -754,6 +780,7 @@
 
     $("f-per-page").addEventListener("change", function () {
       state.perPage = Number($("f-per-page").value) || 25;
+      try { localStorage.setItem("cctracker.perPage", String(state.perPage)); } catch (e) {}
       state.page = 1;
       loadPrompts();
     });
@@ -828,6 +855,11 @@
       var savedTheme = localStorage.getItem("cctracker.theme");
       if (savedTheme) document.documentElement.setAttribute("data-theme", savedTheme);
       if (localStorage.getItem("cctracker.auto") === "1") setAuto(true);
+      var savedPerPage = localStorage.getItem("cctracker.perPage");
+      if (savedPerPage) {
+        state.perPage = Number(savedPerPage) || state.perPage;
+        $("f-per-page").value = String(state.perPage);
+      }
     } catch (e) { /* private browsing */ }
 
     loadMeta();
