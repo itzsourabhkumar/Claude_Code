@@ -19,12 +19,18 @@ Endpoints
     GET /api/models     per-model aggregates
     GET /api/prompts    paginated interaction history
     GET /api/filters    values for the dropdowns (projects, models, years)
+    GET /api/pricing    the price table, exchange rate and assumptions in use
     GET /api/meta       last-updated timestamp and tracker settings
     GET /api/export.csv, /api/export.json   current filter, all matching rows
     GET /api/refresh    re-scan the JSONL tree into the index
 
 All endpoints accept: from, to, range, year, month, project, model, search,
 origin, session_id.
+
+Every aggregate endpoint also returns cost, split into input / cached input /
+output and totalled in INR (and USD). Costs are derived at request time from the
+stored token counts - see tracker/pricing.py - so no stored data changes and the
+existing token fields are returned exactly as before.
 """
 
 from __future__ import annotations
@@ -55,7 +61,17 @@ from tracker.platform_utils import (  # noqa: E402
     port_is_free,
     python_command_name,
 )
-from tracker.query import build_filters, normalise_totals, with_percentages  # noqa: E402
+from tracker.pricing import PRICING_AS_OF, PriceBook  # noqa: E402
+from tracker.query import (  # noqa: E402
+    build_filters,
+    cost_summary,
+    normalise_totals,
+    with_date_costs,
+    with_model_costs,
+    with_percentages,
+    with_project_costs,
+    with_row_costs,
+)
 from tracker.utils import get_logger, now_local  # noqa: E402
 
 #: Fallback bind address. Any configured or requested host is checked against
@@ -65,12 +81,21 @@ DEFAULT_BIND_HOST = "127.0.0.1"
 
 DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
 
-CSV_COLUMNS = [
+#: Pre-existing export columns. Cost columns are appended after these, never
+#: inserted among them, so a script reading the old CSV keeps working.
+CSV_TOKEN_COLUMNS = [
     "timestamp", "date", "project", "git_branch", "model", "session_id",
     "origin", "prompt", "prompt_length",
     "input_tokens", "output_tokens", "cache_read_input_tokens",
     "cache_creation_input_tokens", "total_tokens",
 ]
+
+CSV_COST_COLUMNS = [
+    "input_cost_inr", "cached_input_cost_inr", "output_cost_inr",
+    "total_cost_inr", "total_cost_usd",
+]
+
+CSV_COLUMNS = CSV_TOKEN_COLUMNS + CSV_COST_COLUMNS
 
 
 class _State:
@@ -81,6 +106,8 @@ class _State:
         self.lock = threading.Lock()
         self.db = Database(config.index_path, check_same_thread=False)
         self.log = get_logger("server", config.logs_dir)
+        # Prices never change during a run, so resolve them once.
+        self.prices = PriceBook.from_config(config)
 
     def close(self) -> None:
         with self.lock:
@@ -90,7 +117,7 @@ class _State:
 STATE: _State | None = None
 
 
-def _flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
+def _flatten_record(record: Dict[str, Any], prices: Any = None) -> Dict[str, Any]:
     """Flatten a stored record into the flat shape used for CSV export."""
     usage = record.get("usage") or {}
     flat = {key: record.get(key) for key in CSV_COLUMNS if key in record}
@@ -102,6 +129,10 @@ def _flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
     if flat.get("prompt") is None:
         # Prompt storage may be disabled; the hash still identifies the prompt.
         flat["prompt"] = record.get("prompt_hash") or ""
+    if prices is not None:
+        cost = prices.cost_for(usage, record.get("model"))
+        for column in CSV_COST_COLUMNS:
+            flat[column] = cost.get(column)
     return flat
 
 
@@ -188,6 +219,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/summary":
             with STATE.lock:
                 summary = normalise_totals(STATE.db.summary(filters))
+                # Priced per model, then summed - a selection spanning two
+                # models has no single rate.
+                summary["cost"] = cost_summary(STATE.db, filters, STATE.prices)
             summary["filters"] = filters
             summary["generated_at"] = now_local().isoformat(timespec="seconds")
             self._json(summary)
@@ -195,16 +229,19 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/projects":
             with STATE.lock:
                 rows = [normalise_totals(r) for r in STATE.db.by_project(filters)]
+                rows = with_project_costs(rows, STATE.db, filters, STATE.prices)
             self._json({"rows": with_percentages(rows)})
 
         elif route == "/api/usage":
             with STATE.lock:
                 rows = [normalise_totals(r) for r in STATE.db.by_date(filters)]
+                rows = with_date_costs(rows, STATE.db, filters, STATE.prices)
             self._json({"rows": rows})
 
         elif route == "/api/models":
             with STATE.lock:
                 rows = [normalise_totals(r) for r in STATE.db.by_model(filters)]
+                rows = with_model_costs(rows, STATE.prices)
             self._json({"rows": with_percentages(rows)})
 
         elif route == "/api/prompts":
@@ -218,6 +255,9 @@ class Handler(BaseHTTPRequestHandler):
                     limit=per_page,
                     offset=(page - 1) * per_page,
                 )
+            # Each history row is one interaction from one model, so it can be
+            # priced directly rather than grouped first.
+            result["rows"] = with_row_costs(result["rows"], STATE.prices)
             result["page"] = page
             result["pages"] = max(1, -(-result["total"] // result["limit"]))
             self._json(result)
@@ -252,6 +292,27 @@ class Handler(BaseHTTPRequestHandler):
                 "page_size": STATE.config.page_size,
                 "timezone": STATE.config.timezone,
                 "platform": describe_platform()["os"],
+                "pricing_enabled": STATE.prices.enabled,
+                "usd_to_inr": STATE.prices.usd_to_inr,
+                "pricing_as_of": PRICING_AS_OF,
+            })
+
+        elif route == "/api/pricing":
+            # Everything needed to audit a figure shown on the dashboard: the
+            # rates used, the exchange rate, the cache-TTL assumption, and how
+            # current the table is.
+            prices = STATE.prices
+            self._json({
+                "enabled": prices.enabled,
+                "currency": "INR",
+                "usd_to_inr": prices.usd_to_inr,
+                "cache_write_ttl": prices.cache_write_ttl,
+                "pricing_as_of": PRICING_AS_OF,
+                "models": {name: prices.prices[name] for name in prices.known_models()},
+                "note": (
+                    "Costs are derived from stored token counts at request time; "
+                    "no cost is written to disk. Prices are USD per million tokens."
+                ),
             })
 
         elif route == "/api/refresh":
@@ -272,9 +333,12 @@ class Handler(BaseHTTPRequestHandler):
             records: List[Dict[str, Any]] = list(STATE.db.all_matching(filters))
 
         if route.endswith(".json"):
+            with STATE.lock:
+                totals = cost_summary(STATE.db, filters, STATE.prices)
             body = json.dumps(
                 {"exported_at": now_local().isoformat(timespec="seconds"),
-                 "filters": filters, "count": len(records), "interactions": records},
+                 "filters": filters, "count": len(records), "cost": totals,
+                 "interactions": records},
                 ensure_ascii=False, indent=2,
             ).encode("utf-8")
             self._send(
@@ -287,7 +351,7 @@ class Handler(BaseHTTPRequestHandler):
         writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         writer.writeheader()
         for record in records:
-            writer.writerow(_flatten_record(record))
+            writer.writerow(_flatten_record(record, STATE.prices))
         body = buffer.getvalue().encode("utf-8-sig")  # BOM so Excel reads UTF-8
         self._send(
             HTTPStatus.OK, body, "text/csv; charset=utf-8",

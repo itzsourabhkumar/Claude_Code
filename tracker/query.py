@@ -11,6 +11,7 @@ import datetime as _dt
 from typing import Any, Dict, List, Optional, Tuple
 
 from .database import Database
+from .pricing import PriceBook
 from .utils import now_local
 
 #: Names accepted by ``--range`` on the CLI and ``?range=`` on the API.
@@ -145,3 +146,84 @@ def normalise_totals(row: Dict[str, Any]) -> Dict[str, Any]:
         if key in row and row[key] is None:
             row[key] = 0
     return row
+
+
+# --------------------------------------------------------------------------
+# Cost attachment
+#
+# One implementation, used by the API server, the CLI and the generated
+# reports, so a rupee figure can never differ between them for the same filter.
+# All of it is derived from the token counts already stored - see
+# tracker/pricing.py for why cost is never written to disk.
+# --------------------------------------------------------------------------
+#: Cost fields added to a summary or a grouped row, in display order.
+COST_FIELDS = (
+    "input_cost_inr",
+    "cached_input_cost_inr",
+    "output_cost_inr",
+    "total_cost_inr",
+    "input_cost_usd",
+    "cached_input_cost_usd",
+    "output_cost_usd",
+    "total_cost_usd",
+)
+
+
+def cost_summary(db: Database, filters: Dict[str, Any], prices: PriceBook) -> Dict[str, Any]:
+    """Cost for a whole filtered selection, priced per model then summed."""
+    return prices.aggregate(db.totals_by_model(filters))
+
+
+def attach_cost(row: Dict[str, Any], cost: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy the cost fields onto a row, leaving every existing key alone."""
+    for field in COST_FIELDS:
+        row[field] = cost.get(field)
+    row["priced"] = cost.get("priced", False)
+    row["unpriced_tokens"] = cost.get("unpriced_tokens") or 0
+    return row
+
+
+def _group_costs(
+    grouped_rows: List[Dict[str, Any]], key: str, prices: PriceBook
+) -> Dict[Any, Dict[str, Any]]:
+    """Cost per group value, from rows already split by (key, model)."""
+    buckets: Dict[Any, List[Dict[str, Any]]] = {}
+    for row in grouped_rows:
+        buckets.setdefault(row.get(key), []).append(row)
+    return {value: prices.aggregate(rows) for value, rows in buckets.items()}
+
+
+def with_project_costs(
+    rows: List[Dict[str, Any]], db: Database, filters: Dict[str, Any], prices: PriceBook
+) -> List[Dict[str, Any]]:
+    """Add cost fields to per-project rows."""
+    costs = _group_costs(db.by_project_model(filters), "project", prices)
+    for row in rows:
+        attach_cost(row, costs.get(row.get("project"), {}))
+    return rows
+
+
+def with_date_costs(
+    rows: List[Dict[str, Any]], db: Database, filters: Dict[str, Any], prices: PriceBook
+) -> List[Dict[str, Any]]:
+    """Add cost fields to per-day rows."""
+    costs = _group_costs(db.by_date_model(filters), "date", prices)
+    for row in rows:
+        attach_cost(row, costs.get(row.get("date"), {}))
+    return rows
+
+
+def with_model_costs(rows: List[Dict[str, Any]], prices: PriceBook) -> List[Dict[str, Any]]:
+    """Add cost fields to per-model rows - each row is already one model."""
+    for row in rows:
+        attach_cost(row, prices.aggregate([row]))
+    return rows
+
+
+def with_row_costs(
+    rows: List[Dict[str, Any]], prices: PriceBook
+) -> List[Dict[str, Any]]:
+    """Add cost fields to individual interaction rows (the history table)."""
+    for row in rows:
+        attach_cost(row, prices.cost_for(row, row.get("model")))
+    return rows

@@ -24,7 +24,9 @@
     autoSeconds: 60,
     autoTimer: null,
     lastProjects: [],
-    lastDaily: []
+    lastDaily: [],
+    // Pricing metadata from /api/meta; costs are hidden until it arrives.
+    pricing: { enabled: false, usd_to_inr: null, as_of: null }
   };
 
   var MONTHS = ["January", "February", "March", "April", "May", "June", "July",
@@ -62,6 +64,48 @@
     if (value == null) return "—";
     var n = Number(value);
     return isFinite(n) ? n.toLocaleString() : "—";
+  }
+
+  /* Rupees in Indian digit grouping (2,2,3 from the right), e.g.
+   * Rs.12,34,567.89 - "1,234,567.89" reads wrong to this dashboard's audience.
+   * Returns an em dash for null so an unpriced model is visibly unknown
+   * rather than silently zero. */
+  function inr(value, decimals) {
+    if (value == null) return "\u2014";
+    var n = Number(value);
+    if (!isFinite(n)) return "\u2014";
+    var places = decimals == null ? 2 : decimals;
+    var sign = n < 0 ? "-" : "";
+    n = Math.abs(n);
+    var whole = Math.floor(n);
+    var frac = places > 0 ? (n - whole).toFixed(places).slice(1) : "";
+    var digits = String(whole);
+    var grouped;
+    if (digits.length > 3) {
+      var tail = digits.slice(-3);
+      var head = digits.slice(0, -3);
+      var parts = [];
+      while (head.length > 2) {
+        parts.unshift(head.slice(-2));
+        head = head.slice(0, -2);
+      }
+      if (head) parts.unshift(head);
+      grouped = parts.join(",") + "," + tail;
+    } else {
+      grouped = digits;
+    }
+    return sign + "\u20b9" + grouped + frac;
+  }
+
+  /* Compact rupees for dense table cells: Rs.1.2L / Rs.3.4Cr. */
+  function inrCompact(value) {
+    if (value == null) return "\u2014";
+    var n = Number(value);
+    if (!isFinite(n)) return "\u2014";
+    var abs = Math.abs(n);
+    if (abs >= 1e7) return "\u20b9" + trim(n / 1e7) + "Cr";
+    if (abs >= 1e5) return "\u20b9" + trim(n / 1e5) + "L";
+    return inr(n, abs >= 100 ? 0 : 2);
   }
 
   function shortModel(name) {
@@ -405,6 +449,8 @@
     $("c-total").textContent = compact(summary.total_tokens);
     $("c-total-foot").textContent = exact(summary.total_tokens) + " tokens";
 
+    renderCostCards(summary.cost);
+
     $("c-projects").textContent = exact(summary.projects);
     $("c-projects-foot").textContent = summary.first_date
       ? summary.first_date + " → " + summary.last_date
@@ -422,10 +468,82 @@
     });
   }
 
+  /* The three buckets plus their total, in rupees. The total is the sum of the
+   * three cards beside it - never an independently computed figure. */
+  function renderCostCards(cost) {
+    var host = $("cost-cards");
+    var note = $("cost-note");
+    if (!state.pricing.enabled || !cost) {
+      host.hidden = true;
+      note.hidden = true;
+      return;
+    }
+    host.hidden = false;
+
+    $("c-cost-input").textContent = inr(cost.input_cost_inr);
+    $("c-cost-input-foot").textContent = usdFoot(cost.input_cost_usd, "fresh input tokens");
+
+    $("c-cost-cached").textContent = inr(cost.cached_input_cost_inr);
+    $("c-cost-cached-foot").textContent = usdFoot(
+      cost.cached_input_cost_usd, "cache reads + writes");
+
+    $("c-cost-output").textContent = inr(cost.output_cost_inr);
+    $("c-cost-output-foot").textContent = usdFoot(cost.output_cost_usd, "generated tokens");
+
+    $("c-cost-total").textContent = inr(cost.total_cost_inr);
+    $("c-cost-total-foot").textContent = usdFoot(cost.total_cost_usd, "input + cached + output");
+
+    renderCostNote(cost);
+  }
+
+  function usdFoot(usd, label) {
+    if (usd == null) return label;
+    return "$" + Number(usd).toFixed(2) + " \u00b7 " + label;
+  }
+
+  /* Says exactly what produced the numbers above, so a figure can be audited
+   * without reading the source: the rate, the cache-TTL assumption, how current
+   * the price table is, and anything that could not be priced. */
+  function renderCostNote(cost) {
+    var note = $("cost-note");
+    var bits = [];
+    if (cost.usd_to_inr) {
+      bits.push("Converted at <b>1 USD = \u20b9" + Number(cost.usd_to_inr).toFixed(2) +
+                "</b> (set in config.json)");
+    }
+    if (cost.cache_write_ttl) {
+      bits.push("cache writes priced at the <b>" + esc(cost.cache_write_ttl) + "</b> TTL rate");
+    }
+    if (cost.pricing_as_of) {
+      bits.push("prices as of <b>" + esc(cost.pricing_as_of) + "</b>");
+    }
+    var text = bits.join(" \u00b7 ") + ".";
+    if (cost.unpriced_tokens) {
+      text += " <b>" + exact(cost.unpriced_tokens) + " tokens</b> from " +
+              (cost.unpriced_models && cost.unpriced_models.length
+                ? esc(cost.unpriced_models.join(", "))
+                : "an unrecognised model") +
+              " have no price and are excluded from the total.";
+    }
+    note.innerHTML = text;
+    note.hidden = false;
+  }
+
+  /* The three cost buckets plus the total, for one project row. Compact
+   * because these sit in a dense table; the summary cards carry full precision.
+   * Emitted even when pricing is off - the cells are hidden by CSS, which keeps
+   * every row's cell count matching the header. */
+  function costCells(row) {
+    return '<td class="num cost-col">' + inrCompact(row.input_cost_inr) + "</td>" +
+           '<td class="num cost-col">' + inrCompact(row.cached_input_cost_inr) + "</td>" +
+           '<td class="num cost-col">' + inrCompact(row.output_cost_inr) + "</td>" +
+           '<td class="num cost-col strong">' + inrCompact(row.total_cost_inr) + "</td>";
+  }
+
   function renderProjectTable(rows) {
     var body = el("#project-table tbody");
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="7" class="empty">No projects match this filter.</td></tr>';
+      body.innerHTML = '<tr><td colspan="11" class="empty">No projects match this filter.</td></tr>';
       return;
     }
     var sorted = sortRows(rows, state.projectSort);
@@ -439,6 +557,7 @@
         '<td class="num">' + exact(r.output_tokens) + "</td>" +
         '<td class="num">' + exact(r.cache_tokens) + "</td>" +
         '<td class="num">' + exact(r.total_tokens) + "</td>" +
+        costCells(r) +
         '<td class="num"><span class="share"><span class="track">' +
           '<span class="fill" style="width:' + Math.min(100, pct) + '%"></span></span>' +
           '<span class="pct">' + pct.toFixed(1) + "%</span></span></td>" +
@@ -471,7 +590,7 @@
   function renderPromptTable(result) {
     var body = el("#prompt-table tbody");
     if (!result.rows.length) {
-      body.innerHTML = '<tr><td colspan="9" class="empty">' +
+      body.innerHTML = '<tr><td colspan="10" class="empty">' +
         "<strong>No interactions match this filter</strong>" +
         "Try widening the date range or clearing the prompt search.</td></tr>";
     } else {
@@ -492,6 +611,7 @@
           '<td class="num">' + exact(r.output_tokens) + "</td>" +
           '<td class="num">' + exact(r.cache_tokens) + "</td>" +
           '<td class="num">' + exact(r.total_tokens) + "</td>" +
+          '<td class="num cost-col strong">' + inrCompact(r.total_cost_inr) + "</td>" +
         "</tr>";
       }).join("");
 
@@ -636,6 +756,14 @@
       $("meta-line").textContent = bits.length ? bits.join(" · ") : "Local usage tracker";
       $("footer-meta").textContent = "tracker v" + meta.tracker_version +
         (meta.last_date ? " · latest data " + meta.last_date : "");
+      state.pricing = {
+        enabled: meta.pricing_enabled !== false,
+        usd_to_inr: meta.usd_to_inr,
+        as_of: meta.pricing_as_of
+      };
+      // Pricing can be switched off in config.json; hide the columns entirely
+      // rather than filling them with dashes.
+      document.body.classList.toggle("no-pricing", !state.pricing.enabled);
       applyServerDefaults(meta);
       if (!meta.total_interactions) {
         banner("No usage recorded yet. Run: " + pythonCommand(meta.platform) +

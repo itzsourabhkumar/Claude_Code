@@ -353,6 +353,36 @@ class Database:
         )
         return [dict(row) for row in cur.fetchall()]
 
+    # -- per-model breakdowns (for costing) --------------------------------
+    #
+    # Cost cannot be derived from a blended total: a selection spanning Opus and
+    # Haiku has no single rate. These group by model *as well as* the dimension
+    # asked for, so each model's tokens can be priced at its own rates and only
+    # the resulting money summed. See tracker/pricing.py.
+    def totals_by_model(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """One row per model, for costing a whole filtered selection."""
+        return self.by_model(filters)
+
+    def by_project_model(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """One row per (project, model)."""
+        where, params = self._where(filters)
+        cur = self.conn.execute(
+            "SELECT project, model, %s FROM interactions%s "
+            "GROUP BY project, model ORDER BY project" % (_TOTALS_SQL, where),
+            params,
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def by_date_model(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """One row per (date, model)."""
+        where, params = self._where(filters)
+        cur = self.conn.execute(
+            "SELECT date, model, %s FROM interactions%s "
+            "GROUP BY date, model ORDER BY date" % (_TOTALS_SQL, where),
+            params,
+        )
+        return [dict(row) for row in cur.fetchall()]
+
     def prompts(
         self,
         filters: Dict[str, Any],

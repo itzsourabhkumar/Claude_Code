@@ -37,9 +37,16 @@ from .platform_utils import (
     describe_platform,
     python_command_name,
 )
+from .pricing import PRICING_AS_OF, PriceBook, format_inr, rupee_symbol
 from .database import open_database
 from .parser import iter_transcripts
-from .query import build_filters, normalise_totals, resolve_range
+from .query import (
+    build_filters,
+    cost_summary,
+    normalise_totals,
+    resolve_range,
+    with_project_costs,
+)
 from .reports import generate_all
 from .utils import now_local
 
@@ -51,7 +58,42 @@ def _fmt(value: Optional[int]) -> str:
     return "-" if value is None else format(int(value), ",")
 
 
-def print_usage_block(title: str, totals: Dict[str, Any], projects: List[Dict[str, Any]]) -> None:
+def _money(value: Optional[float]) -> str:
+    """Rupees, using a symbol this terminal can actually encode."""
+    return format_inr(value, symbol=rupee_symbol())
+
+
+def print_cost_block(cost: Dict[str, Any]) -> None:
+    """The requested breakdown: three buckets, then their total.
+
+    Printed only when pricing is enabled and something in the selection could be
+    priced - an all-unpriced selection says so instead of showing four dashes.
+    """
+    if not cost:
+        return
+    if not cost.get("priced"):
+        if cost.get("unpriced_tokens"):
+            print("Cost          : not priced (%s)"
+                  % ", ".join(cost.get("unpriced_models") or ["unknown model"]))
+        return
+
+    print()
+    print("Input Tokens Cost        : " + _money(cost.get("input_cost_inr")))
+    print("Cached Input Tokens Cost : " + _money(cost.get("cached_input_cost_inr")))
+    print("Output Tokens Cost       : " + _money(cost.get("output_cost_inr")))
+    print("-" * 44)
+    print("Total Cost               : %s  (USD %.2f)"
+          % (_money(cost.get("total_cost_inr")), cost.get("total_cost_usd") or 0.0))
+    print("  at 1 USD = %s, prices as of %s"
+          % (_money(cost.get("usd_to_inr")), cost.get("pricing_as_of") or PRICING_AS_OF))
+    if cost.get("unpriced_tokens"):
+        print("  %s tokens from %s are unpriced and excluded"
+              % (_fmt(cost["unpriced_tokens"]),
+                 ", ".join(cost.get("unpriced_models") or ["an unknown model"])))
+
+
+def print_usage_block(title: str, totals: Dict[str, Any], projects: List[Dict[str, Any]],
+                     cost: Optional[Dict[str, Any]] = None) -> None:
     totals = normalise_totals(dict(totals))
     print()
     print("Claude Code Usage - " + title)
@@ -62,6 +104,9 @@ def print_usage_block(title: str, totals: Dict[str, Any], projects: List[Dict[st
     print("Output Tokens : " + _fmt(totals.get("output_tokens")))
     print("Cache Tokens  : " + _fmt(totals.get("cache_tokens")))
     print("Total Tokens  : " + _fmt(totals.get("total_tokens")))
+
+    if cost:
+        print_cost_block(cost)
 
     if projects:
         width = max(len(str(row.get("project") or "?")) for row in projects)
@@ -94,29 +139,33 @@ def _range_for(command: str) -> tuple:
 def cmd_period(args, config) -> int:
     date_from, date_to = _range_for(args.command)
     filters = build_filters({"from": date_from, "to": date_to})
+    prices = PriceBook.from_config(config)
     with open_database(config) as db:
         totals = db.summary(filters)
         projects = db.by_project(filters)
+        cost = cost_summary(db, filters, prices) if prices.enabled else None
     label = {
         "today": now_local().strftime("%d %b %Y"),
         "yesterday": (now_local() - _dt.timedelta(days=1)).strftime("%d %b %Y"),
         "month": now_local().strftime("%B %Y"),
         "year": now_local().strftime("%Y"),
     }[args.command]
-    print_usage_block(label, totals, projects)
+    print_usage_block(label, totals, projects, cost)
     return 0
 
 
 def cmd_range(args, config) -> int:
     filters = build_filters({"from": args.date_from, "to": args.date_to, "range": args.range})
+    prices = PriceBook.from_config(config)
     with open_database(config) as db:
         totals = db.summary(filters)
         projects = db.by_project(filters)
+        cost = cost_summary(db, filters, prices) if prices.enabled else None
     label = "%s to %s" % (
         filters.get("date_from") or "beginning",
         filters.get("date_to") or "today",
     )
-    print_usage_block(label, totals, projects)
+    print_usage_block(label, totals, projects, cost)
     return 0
 
 
@@ -124,12 +173,14 @@ def cmd_project(args, config) -> int:
     filters = build_filters(
         {"project": args.name, "from": args.date_from, "to": args.date_to, "range": args.range}
     )
+    prices = PriceBook.from_config(config)
     with open_database(config) as db:
         totals = db.summary(filters)
         by_date = db.by_date(filters)
         models = db.by_model(filters)
+        cost = cost_summary(db, filters, prices) if prices.enabled else None
 
-    print_usage_block("project " + args.name, totals, [])
+    print_usage_block("project " + args.name, totals, [], cost)
     if by_date:
         print("By date:")
         print()
@@ -150,22 +201,36 @@ def cmd_project(args, config) -> int:
 
 def cmd_projects(args, config) -> int:
     filters = build_filters({"from": args.date_from, "to": args.date_to, "range": args.range})
+    prices = PriceBook.from_config(config)
     with open_database(config) as db:
         rows = [normalise_totals(dict(r)) for r in db.by_project(filters)]
+        if prices.enabled:
+            rows = with_project_costs(rows, db, filters, prices)
+        cost = cost_summary(db, filters, prices) if prices.enabled else None
     if not rows:
         print("No usage recorded yet.")
         return 0
     whole = sum(row.get("total_tokens") or 0 for row in rows) or 1
     width = max(max(len(str(r["project"])) for r in rows), 24)
+    show_cost = bool(prices.enabled)
+
     print()
-    print("%-*s %9s %14s %14s %14s %14s %7s" % (
-        width, "Project", "Prompts", "Input", "Output", "Cache", "Total", "%"))
-    print("-" * (width + 78))
+    header = "%-*s %9s %14s %14s %14s %14s %7s" % (
+        width, "Project", "Prompts", "Input", "Output", "Cache", "Total", "%")
+    if show_cost:
+        header += " %16s" % "Cost"
+    print(header)
+    print("-" * (width + 78 + (17 if show_cost else 0)))
     for row in rows:
-        print("%-*s %9s %14s %14s %14s %14s %6.1f%%" % (
+        line = "%-*s %9s %14s %14s %14s %14s %6.1f%%" % (
             width, row["project"], _fmt(row.get("prompts")), _fmt(row.get("input_tokens")),
             _fmt(row.get("output_tokens")), _fmt(row.get("cache_tokens")),
-            _fmt(row.get("total_tokens")), (row.get("total_tokens") or 0) * 100.0 / whole))
+            _fmt(row.get("total_tokens")), (row.get("total_tokens") or 0) * 100.0 / whole)
+        if show_cost:
+            line += " %16s" % _money(row.get("total_cost_inr"))
+        print(line)
+    if cost:
+        print_cost_block(cost)
     print()
     return 0
 
@@ -244,6 +309,11 @@ def cmd_status(args, config) -> int:
     print("  index           : " + str(config.index_path))
     print("  logs            : " + str(config.logs_dir))
     print("  timezone        : " + config.timezone)
+    if config.pricing_enabled:
+        print("  pricing         : 1 USD = %s, cache writes at %s, prices %s"
+              % (_money(config.usd_to_inr), config.cache_write_ttl, PRICING_AS_OF))
+    else:
+        print("  pricing         : disabled")
     print("  store prompts   : " + ("yes" if config.store_prompt_text else "no (hash only)"))
     print()
     print("  interactions    : " + _fmt(summary.get("prompts")))
@@ -272,12 +342,17 @@ def cmd_json(args, config) -> int:
         {"from": args.date_from, "to": args.date_to, "range": args.range,
          "project": args.project, "model": args.model, "search": args.search}
     )
+    prices = PriceBook.from_config(config)
     with open_database(config) as db:
         payload = {
             "summary": normalise_totals(db.summary(filters)),
             "projects": [normalise_totals(dict(r)) for r in db.by_project(filters)],
             "daily": [normalise_totals(dict(r)) for r in db.by_date(filters)],
+            "cost": cost_summary(db, filters, prices),
         }
+        if prices.enabled:
+            payload["projects"] = with_project_costs(
+                payload["projects"], db, filters, prices)
     print(json.dumps(payload, indent=2, default=str))
     return 0
 
