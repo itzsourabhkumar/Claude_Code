@@ -25,8 +25,10 @@
     autoTimer: null,
     lastProjects: [],
     lastDaily: [],
-    // Pricing metadata from /api/meta; costs are hidden until it arrives.
-    pricing: { enabled: false, usd_to_inr: null, as_of: null }
+    // Pricing metadata from /api/meta. Defaults to enabled because /api/meta
+    // races with /api/summary: the summary payload carries its own cost object,
+    // so rendering must not wait on meta, which only ever switches pricing off.
+    pricing: { enabled: true, usd_to_inr: null, as_of: null }
   };
 
   var MONTHS = ["January", "February", "March", "April", "May", "June", "July",
@@ -473,6 +475,11 @@
   function renderCostCards(cost) {
     var host = $("cost-cards");
     var note = $("cost-note");
+
+    // Hide only when there is genuinely nothing to show: pricing switched off
+    // in config.json, or a response with no cost object at all. A cost object
+    // that came back unpriced is shown as "unknown", not hidden - that is a
+    // real answer and the note below explains it.
     if (!state.pricing.enabled || !cost) {
       host.hidden = true;
       note.hidden = true;
@@ -507,6 +514,15 @@
   function renderCostNote(cost) {
     var note = $("cost-note");
     var bits = [];
+    if (cost.priced === false) {
+      note.innerHTML = "No cost could be calculated for this filter: " +
+        (cost.unpriced_models && cost.unpriced_models.length
+          ? "no price is configured for <b>" + esc(cost.unpriced_models.join(", ")) + "</b>."
+          : "the selection contains no priced usage.") +
+        " Add rates under <b>pricing.model_prices</b> in config.json.";
+      note.hidden = false;
+      return;
+    }
     if (cost.usd_to_inr) {
       bits.push("Converted at <b>1 USD = \u20b9" + Number(cost.usd_to_inr).toFixed(2) +
                 "</b> (set in config.json)");

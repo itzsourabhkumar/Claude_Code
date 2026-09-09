@@ -647,6 +647,13 @@ td.cost-col.strong {
 }
 
 
+/* The HTML `hidden` attribute must actually hide things. An author rule such as
+   .cards{display:grid} beats the browser's own [hidden]{display:none} whatever
+   the specificity, so without this a hidden section stays on screen. */
+[hidden] {
+  display: none !important;
+}
+
 /* pricing.enabled = false in config.json: the cost columns are always rendered
    so header and body cell counts stay in step, and hidden here. */
 body.no-pricing td.cost-col,
