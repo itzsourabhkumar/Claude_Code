@@ -7,9 +7,10 @@ dashes - the renderer bailed out unless `/api/meta` had already arrived, and in 
 browser the summary request usually wins the race.
 
 `tests/js/render_harness.js` executes dashboard.js against a minimal DOM stub
-with that ordering forced, so the regression cannot come back unnoticed. Node is
-optional: without it these tests skip rather than fail, since the tracker itself
-has no JavaScript dependency.
+with that ordering forced, and checks all three cost surfaces - the summary
+cards, the project summary table and the prompt history table - so the
+regression cannot come back unnoticed. Node is optional: without it these tests
+skip rather than fail, since the tracker itself has no JavaScript dependency.
 """
 
 from __future__ import annotations
@@ -47,11 +48,38 @@ class TestCostCardsRender:
                                capture_output=True, text=True, timeout=60)
         assert check.returncode == 0, check.stderr
 
-    def test_all_four_cost_cards_are_populated(self):
+    def test_every_cost_surface_renders(self):
         """The reported bug: cards visible but every value an em dash."""
         result = run_harness(DASHBOARD_JS)
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "ALL COST CARDS POPULATED" in result.stdout
+        assert "ALL COST SURFACES RENDER CORRECTLY" in result.stdout
+
+    def test_no_error_banner_is_raised_during_load(self):
+        """A thrown renderer is swallowed into a banner and skips everything
+        after it - which is how the original bug hid."""
+        out = run_harness(DASHBOARD_JS).stdout
+        assert "BANNER: (empty)" in out, out
+
+    def test_the_project_table_renders_its_four_cost_columns(self):
+        out = run_harness(DASHBOARD_JS).stdout
+        assert "cost cells rendered: 8" in out, out
+
+    def test_the_history_table_renders_its_cost_column(self):
+        out = run_harness(DASHBOARD_JS).stdout
+        assert "cost cells rendered: 2" in out, out
+
+    def test_an_unpriced_row_shows_a_dash_not_zero(self):
+        """Unknown must never render as free - the same rule the tracker
+        applies to missing token counts."""
+        out = run_harness(DASHBOARD_JS).stdout
+        assert "unpriced project shows em dashes, not zeros" in out
+        assert "unpriced project is not rendered as" in out
+        assert "[FAIL]" not in out, out
+
+    def test_table_headers_and_bodies_stay_aligned(self):
+        out = run_harness(DASHBOARD_JS).stdout
+        assert "project row 11 cells vs 11 headers" in out, out
+        assert "history row 10 cells vs 10 headers" in out, out
 
     def test_cost_renders_even_though_meta_arrives_last(self):
         """The harness delays /api/meta on purpose - this is the actual race."""
