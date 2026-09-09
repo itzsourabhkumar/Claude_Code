@@ -66,6 +66,32 @@
     </div>
   </section>
 
+  <!-- --------------------------------------------------------------- cost -->
+  <section class="cards cost-cards" id="cost-cards" aria-label="Cost breakdown" hidden>
+    <div class="card cost">
+      <div class="label">Input Tokens Cost</div>
+      <div class="value" id="c-cost-input">&mdash;</div>
+      <div class="foot" id="c-cost-input-foot">&nbsp;</div>
+    </div>
+    <div class="card cost">
+      <div class="label">Cached Input Tokens Cost</div>
+      <div class="value" id="c-cost-cached">&mdash;</div>
+      <div class="foot" id="c-cost-cached-foot">&nbsp;</div>
+    </div>
+    <div class="card cost">
+      <div class="label">Output Tokens Cost</div>
+      <div class="value" id="c-cost-output">&mdash;</div>
+      <div class="foot" id="c-cost-output-foot">&nbsp;</div>
+    </div>
+    <div class="card cost total">
+      <div class="label">Total Cost</div>
+      <div class="value" id="c-cost-total">&mdash;</div>
+      <div class="foot" id="c-cost-total-foot">&nbsp;</div>
+    </div>
+  </section>
+
+  <p class="cost-note" id="cost-note" hidden></p>
+
   <!-- ------------------------------------------------------------ filters -->
   <section class="panel" aria-label="Filters">
     <div class="panel-head">
@@ -182,6 +208,10 @@
             <th class="num sortable" data-sort="output_tokens">Output</th>
             <th class="num sortable" data-sort="cache_tokens">Cache</th>
             <th class="num sortable" data-sort="total_tokens" data-dir="desc">Total</th>
+            <th class="num cost-col sortable" data-sort="input_cost_inr">Input Cost</th>
+            <th class="num cost-col sortable" data-sort="cached_input_cost_inr">Cached Cost</th>
+            <th class="num cost-col sortable" data-sort="output_cost_inr">Output Cost</th>
+            <th class="num cost-col sortable" data-sort="total_cost_inr">Total Cost</th>
             <th class="num">% of Usage</th>
           </tr>
         </thead>
@@ -209,6 +239,7 @@
             <th class="num sortable" data-sort="output_tokens">Output</th>
             <th class="num sortable" data-sort="cache_tokens">Cache</th>
             <th class="num sortable" data-sort="total_tokens">Total</th>
+            <th class="num cost-col">Cost</th>
           </tr>
         </thead>
         <tbody></tbody>

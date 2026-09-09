@@ -29,6 +29,14 @@
     "page_size": 25
   },
 
+  "//pricing": "Cost is derived from stored token counts at read time and never written to disk, so changing a rate here immediately corrects every historical figure. usd_to_inr is static by design - this tracker makes no network calls. cache_write_ttl is an assumption: Claude Code records how many tokens were cached but not the TTL. model_prices overrides or adds models; omitted cache prices use Anthropic's standard multipliers.",
+  "pricing": {
+    "enabled": true,
+    "usd_to_inr": 88.0,
+    "cache_write_ttl": "5m",
+    "model_prices": {}
+  },
+
   "project_detection": {
     "use_git_root": true,
     "cache_ttl_seconds": 86400,

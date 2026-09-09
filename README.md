@@ -12,6 +12,9 @@ data/usage/2026/09/03/AccentHRP/prompts.jsonl
 
 Runs on **Windows**, **Ubuntu/Linux** and **macOS**.
 
+Every figure is also priced: input, cached input and output cost separately, and
+a combined total in **Indian rupees (₹)**.
+
 Everything is local. No network calls, no proxy, no credentials read or stored,
 no changes to your projects.
 
@@ -76,11 +79,12 @@ history already on your machine.
 11. [Data directory structure](#11-data-directory-structure)
 12. [Configuration](#12-configuration)
 13. [Token tracking](#13-token-tracking)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Updating the tracker](#15-updating-the-tracker)
-16. [Uninstalling](#16-uninstalling)
-17. [Privacy](#17-privacy)
-18. [Known limitations](#18-known-limitations)
+14. [Cost tracking](#14-cost-tracking)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Updating the tracker](#16-updating-the-tracker)
+17. [Uninstalling](#17-uninstalling)
+18. [Privacy](#18-privacy)
+19. [Known limitations](#19-known-limitations)
 
 Appendix: [architecture](#appendix-a-architecture) · [JSON schema](#appendix-b-json-schema) ·
 [API reference](#appendix-c-api-reference) · [reports](#appendix-d-reports) ·
@@ -573,6 +577,20 @@ Total Prompts    Input Tokens    Output Tokens
 Cache Tokens     Total Tokens    Projects
 ```
 
+### Cost cards
+
+Beneath the token cards, the same usage priced in rupees:
+
+```
+Input Tokens Cost    Cached Input Tokens Cost    Output Tokens Cost
+                                                 Total Cost (INR)
+```
+
+The total is the sum of the three cards beside it, never a separate figure. A
+line under the cards states the exchange rate, the cache-TTL assumption and how
+current the price table is, so any number can be audited without reading the
+source. See [section 14](#14-cost-tracking).
+
 ### Filters
 
 ```
@@ -602,7 +620,8 @@ Exports respect the filters currently applied.
 **Project summary** - sortable on every column:
 
 ```
-Project | Prompt Count | Input Tokens | Output Tokens | Cache Tokens | Total Tokens | Usage %
+Project | Prompt Count | Input Tokens | Output Tokens | Cache Tokens | Total Tokens
+        | Input Cost | Cached Cost | Output Cost | Total Cost | Usage %
 ```
 
 Click a project name to filter the whole dashboard by it.
@@ -611,7 +630,7 @@ Click a project name to filter the whole dashboard by it.
 highlighted; click a prompt to expand it:
 
 ```
-Timestamp | Project | Branch | Model | Prompt | Input | Output | Cache | Total
+Timestamp | Project | Branch | Model | Prompt | Input | Output | Cache | Total | Cost
 ```
 
 ### Charts
@@ -795,6 +814,12 @@ hand-edited file can never stop the hook recording usage.
 
   "server": { "host": "127.0.0.1", "port": 8765, "open_browser": true },
   "dashboard": { "auto_refresh_seconds": 0, "page_size": 25 },
+  "pricing": {
+    "enabled": true,
+    "usd_to_inr": 88.0,
+    "cache_write_ttl": "5m",
+    "model_prices": {}
+  },
   "project_detection": {
     "use_git_root": true,
     "cache_ttl_seconds": 86400,
@@ -807,7 +832,7 @@ hand-edited file can never stop the hook recording usage.
 
 | Setting | Meaning |
 |---|---|
-| `store_prompt_text` | Store the prompt text. `false` keeps only its length and hash - see [privacy](#17-privacy) |
+| `store_prompt_text` | Store the prompt text. `false` keeps only its length and hash - see [privacy](#18-privacy) |
 | `prompt_text_max_chars` | Truncate stored prompts at this length (`0` disables truncation) |
 | `track_non_human_turns` | Record turns Claude Code started itself; they cost real tokens |
 | `timezone` | Timezone used to bucket days - see below |
@@ -822,6 +847,10 @@ hand-edited file can never stop the hook recording usage.
 | `server.open_browser` | Open a browser when the dashboard starts |
 | `dashboard.auto_refresh_seconds` | Default auto-refresh: `0` (off), `30`, `60` or `300` |
 | `dashboard.page_size` | Default rows per page: `25`, `50`, `100` or `250` |
+| `pricing.enabled` | Show cost alongside token counts |
+| `pricing.usd_to_inr` | USD -> INR rate used for every rupee figure |
+| `pricing.cache_write_ttl` | `5m` or `1h` - which prompt-cache write rate to assume |
+| `pricing.model_prices` | Per-model USD-per-million overrides, merged over the built-in table |
 | `project_detection.use_git_root` | Prefer the git repository root's name |
 | `project_detection.cache_ttl_seconds` | How long a directory→project resolution is cached |
 | `project_detection.git_timeout_seconds` | How long to wait for `git rev-parse` |
@@ -863,6 +892,7 @@ Useful for CI, containers, or running two installations from one checkout. See
 | `CCTRACKER_LOGS_DIR` | `paths.logs_dir` |
 | `CCTRACKER_HOST` / `CCTRACKER_PORT` | `server.host` / `server.port` |
 | `CCTRACKER_TIMEZONE` | `timezone` |
+| `CCTRACKER_USD_TO_INR` | `pricing.usd_to_inr` |
 | `CCTRACKER_NO_BROWSER=1` | Never open a browser |
 | `CLAUDE_CONFIG_DIR` | Where Claude Code keeps its config (read by Claude Code too) |
 
@@ -942,7 +972,157 @@ roll up into the top-level fields, and adding both would double-count.
 
 ---
 
-## 14. Troubleshooting
+## 14. Cost tracking
+
+Every usage figure is also reported as money, split three ways and totalled in
+Indian rupees:
+
+```
+Input Tokens Cost
+Cached Input Tokens Cost
+Output Tokens Cost
+-------------------------
+Total Cost (INR)
+```
+
+The total is always the sum of the three components printed above it, never an
+independently derived number.
+
+### Cost is derived, never stored
+
+Token counts are facts about a past interaction and never change. A cost is not
+a fact - it is those counts multiplied by a price list and an exchange rate,
+both of which change. So **no cost is ever written to disk**: it is computed at
+read time, wherever usage is displayed, from the token counts already recorded.
+
+That has three consequences worth knowing:
+
+- **Nothing to migrate.** Every interaction ever recorded got a cost the moment
+  this feature landed - no reindex, no JSONL change.
+- **Corrections are retroactive.** Fix a price or the exchange rate in
+  `config.json` and every historical figure is immediately right.
+- **The JSONL tree is unchanged.** It remains the source of truth, exactly as
+  described in [section 11](#11-data-directory-structure).
+
+### The four dimensions are priced separately
+
+This is the whole reason a single blended figure would be wrong:
+
+| Dimension | Rate | Why it matters |
+|---|---|---|
+| `input_tokens` | base input price | Fresh, uncached prompt tokens |
+| `cache_read_input_tokens` | **0.1x** base input | A tenth of the price - and usually the largest count by far |
+| `cache_creation_input_tokens` | **1.25x** base input (5m TTL), 2x (1h) | A premium, not a discount |
+| `output_tokens` | base output price | Typically 5x the input rate |
+
+A tracker that priced "total tokens" at the input rate would overstate a typical
+Claude Code bill by roughly **ten times**, because Claude Code's usage is
+dominated by cache reads. The dashboard reports cache reads and cache writes
+together as **Cached Input Tokens Cost**, with the split available in the API.
+
+### Model-aware pricing
+
+Prices are per model, not global. Costs are aggregated by **grouping tokens by
+model first**, pricing each group at its own rates, and only then summing the
+money - a selection spanning Opus and Haiku has no single rate that could be
+applied to it.
+
+Built-in rates (USD per million tokens), verified against
+`platform.claude.com` on **2026-09-09**:
+
+| Model | Input | Output | Cache write (5m) | Cache write (1h) | Cache read |
+|---|---|---|---|---|---|
+| `claude-fable-5-1` | $10.00 | $50.00 | $12.50 | $20.00 | $0.25 |
+| `claude-fable-5` | $10.00 | $50.00 | $12.50 | $20.00 | $1.00 |
+| `claude-opus-5` | $5.00 | $25.00 | $6.25 | $10.00 | $0.50 |
+| `claude-opus-4-8` | $5.00 | $25.00 | $6.25 | $10.00 | $0.50 |
+| `claude-opus-4-7` | $5.00 | $25.00 | $6.25 | $10.00 | $0.50 |
+| `claude-opus-4-6` | $5.00 | $25.00 | $6.25 | $10.00 | $0.50 |
+| `claude-sonnet-5` | $2.00 | $10.00 | $2.50 | $4.00 | $0.20 |
+| `claude-sonnet-4-6` | $3.00 | $15.00 | $3.75 | $6.00 | $0.30 |
+| `claude-haiku-4-5` | $1.00 | $5.00 | $1.25 | $2.00 | $0.10 |
+
+Dated snapshots (`claude-haiku-4-5-20251001`) and the Bedrock / Vertex id forms
+resolve to the same prices. The current table is always available at
+`GET /api/pricing`.
+
+**An unknown model is never guessed at.** Its cost is `null`, its tokens are
+reported as `unpriced_tokens`, and the dashboard says so under the cost cards -
+the same rule the tracker already applies to missing token counts. Claude Code's
+`<synthetic>` turns never hit the API and are correctly priced at nothing.
+
+To add or correct a model without waiting for an update:
+
+```json
+{ "pricing": { "model_prices": {
+    "some-new-model": { "input": 4.0, "output": 20.0 }
+} } }
+```
+
+Cache prices you omit default to Anthropic's standard multipliers.
+
+### INR conversion
+
+Rupees come from a **static** rate in `config.json`:
+
+```json
+{ "pricing": { "usd_to_inr": 88.0 } }
+```
+
+It is deliberately not fetched from an FX API. This tracker makes no network
+calls at all ([section 18](#18-privacy)), and a rate that moved on its own would
+make the same data report a different figure every day. Set it to whatever rate
+you account at; the dashboard, CLI and reports all state the rate they used.
+
+Rupees are formatted with Indian digit grouping (`₹1,22,201.93` - 2,2,3 from the
+right, not 3,3,3). In a terminal that cannot encode `₹` (a Windows console on a
+legacy code page), the CLI prints `Rs.` instead.
+
+### Where cost appears
+
+| Surface | What you get |
+|---|---|
+| Dashboard cards | The three buckets and the total, with the rate and assumptions stated |
+| Project summary table | Input / cached / output / total cost per project |
+| Prompt history table | Total cost per interaction |
+| `GET /api/summary` | A `cost` object with all three buckets in INR and USD |
+| `GET /api/projects` / `usage` / `models` / `prompts` | Cost fields on every row |
+| `GET /api/pricing` | The full price table and assumptions |
+| Export CSV | Cost columns appended after the existing ones |
+| Export JSON | Per-filter aggregate `cost` object |
+| `python -m tracker.cli today` / `month` / `project` / `range` | The printed breakdown |
+| `python -m tracker.cli projects` | A cost column |
+| `python -m tracker.cli json` | A `cost` object |
+| `reports/**.json` | A `cost` block per period |
+
+### Turning it off
+
+```json
+{ "pricing": { "enabled": false } }
+```
+
+Token tracking is unaffected - only the money disappears from the UI.
+
+### What the figures are not
+
+Costs here are **an estimate of list-price API spend**, computed from token
+counts Claude Code recorded locally. They will not match an invoice exactly:
+
+- a Claude Code subscription is not billed per token at all;
+- batch requests bill at 50%, and this tracker cannot tell a batched request
+  from a normal one;
+- fast mode on Opus 5 bills at $10/$50 rather than $5/$25, and the transcript
+  does not record which speed was used;
+- the prompt-cache TTL is assumed, not measured (see `cache_write_ttl`);
+- long-context and per-platform rates (Bedrock, Vertex) differ from the
+  first-party rates in the table above.
+
+Treat the number as a well-founded estimate for comparing projects and periods,
+not as a bill.
+
+---
+
+## 15. Troubleshooting
 
 Start here on any platform:
 
@@ -1100,7 +1280,7 @@ take a few milliseconds, because only newly appended transcript bytes are read.
 
 ---
 
-## 15. Updating the tracker
+## 16. Updating the tracker
 
 ```bash
 git pull
@@ -1132,7 +1312,7 @@ re-apply your changes - or move them into environment variables instead
 
 ---
 
-## 16. Uninstalling
+## 17. Uninstalling
 
 ### Remove the Claude Code integration
 
@@ -1177,7 +1357,7 @@ in `~/.claude/settings.json`, so remove those first.
 
 ---
 
-## 17. Privacy
+## 18. Privacy
 
 **Never read or stored:** Claude authentication credentials, API keys, OAuth or
 session tokens, cookies, passwords, environment secrets. The tracker never opens
@@ -1229,7 +1409,7 @@ and static file serving is confined to the `dashboard/` directory.
 
 ---
 
-## 18. Known limitations
+## 19. Known limitations
 
 Known and deliberate limits, so the numbers are not over-read:
 
@@ -1274,7 +1454,17 @@ Known and deliberate limits, so the numbers are not over-read:
     ship one; on Windows either run `pip install tzdata` or use a fixed offset
     such as `"+05:30"`, which needs nothing anywhere.
 
-11. **Linux and macOS are implemented but not physically tested.** The project was
+11. **Costs are estimated list-price API spend, not a bill.** They are derived
+    from recorded token counts at published per-token rates. Subscriptions are
+    not billed per token; batch (50%) and fast-mode pricing cannot be detected
+    from the transcript; the prompt-cache TTL is assumed rather than measured.
+    See [section 14](#14-cost-tracking).
+
+12. **The USD to INR rate is static.** It is set in `config.json` and never
+    fetched, because the tracker makes no network calls. Update it yourself when
+    you want figures at a different rate.
+
+13. **Linux and macOS are implemented but not physically tested.** The project was
     developed on Windows 11. All platform-specific behaviour is isolated in
     `tracker/platform_utils.py` and every branch of it is covered by tests that
     run on any machine, but no run on real Linux or macOS hardware has been
@@ -1472,7 +1662,7 @@ form - `D:\Projects\app` on Windows, `/home/you/projects/app` on Linux,
 | `model` | The model that produced most of the turn's output. `models` lists all of them if a turn spanned more than one |
 | `origin` | `human` for prompts you sent; `task-notification` / `system` for turns Claude Code started itself. Both cost tokens, so both are recorded; only `human` counts toward "user-initiated" prompts |
 | `assistant_messages` | How many assistant messages the turn contained |
-| `prompt` | `null` when prompt storage is disabled - see [privacy](#17-privacy) |
+| `prompt` | `null` when prompt storage is disabled - see [privacy](#18-privacy) |
 
 ### Duplicate protection
 
@@ -1503,6 +1693,7 @@ Every endpoint accepts `from`, `to`, `range`, `year`, `month`, `project`, `model
 | `GET /api/models` | Per-model aggregates |
 | `GET /api/prompts` | Paginated history (`page`, `per_page`, `sort`, `dir`) |
 | `GET /api/filters` | Dropdown values (projects, models, years, branches) |
+| `GET /api/pricing` | The price table, exchange rate and assumptions in use |
 | `GET /api/meta` | Last-updated timestamp, settings and platform |
 | `GET /api/export.csv` | CSV of everything matching the filter |
 | `GET /api/export.json` | JSON of everything matching the filter |

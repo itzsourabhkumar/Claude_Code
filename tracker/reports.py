@@ -18,12 +18,21 @@ from typing import Any, Dict, List, Optional
 
 from .config import Config
 from .database import Database
-from .query import month_bounds, normalise_totals
+from .pricing import PriceBook
+from .query import cost_summary, month_bounds, normalise_totals
 from .utils import now_local, write_json_atomic
 
 
 def _totals(db: Database, filters: Dict[str, Any]) -> Dict[str, Any]:
     return normalise_totals(db.summary(filters))
+
+
+def _cost(db: Database, filters: Dict[str, Any],
+          prices: Optional[PriceBook]) -> Optional[Dict[str, Any]]:
+    """Cost for a report period, or None when pricing is switched off."""
+    if prices is None or not prices.enabled:
+        return None
+    return cost_summary(db, filters, prices)
 
 
 def _projects(db: Database, filters: Dict[str, Any]) -> Dict[str, int]:
@@ -34,7 +43,8 @@ def _projects(db: Database, filters: Dict[str, Any]) -> Dict[str, int]:
 
 
 def _shape(period_key: str, period_value: str, totals: Dict[str, Any],
-           projects: Dict[str, int], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+           projects: Dict[str, int], extra: Optional[Dict[str, Any]] = None,
+           cost: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     report = {
         period_key: period_value,
         "total_prompts": totals.get("prompts") or 0,
@@ -49,16 +59,33 @@ def _shape(period_key: str, period_value: str, totals: Dict[str, Any],
         "projects": projects,
         "generated_at": now_local().isoformat(timespec="seconds"),
     }
+    if cost is not None:
+        # Derived from the same token counts printed above, at read time.
+        report["cost"] = {
+            "currency": "INR",
+            "input_cost_inr": cost.get("input_cost_inr"),
+            "cached_input_cost_inr": cost.get("cached_input_cost_inr"),
+            "output_cost_inr": cost.get("output_cost_inr"),
+            "total_cost_inr": cost.get("total_cost_inr"),
+            "total_cost_usd": cost.get("total_cost_usd"),
+            "usd_to_inr": cost.get("usd_to_inr"),
+            "cache_write_ttl": cost.get("cache_write_ttl"),
+            "pricing_as_of": cost.get("pricing_as_of"),
+            "unpriced_tokens": cost.get("unpriced_tokens"),
+        }
     report.update(extra or {})
     return report
 
 
-def daily_report(db: Database, date: str) -> Dict[str, Any]:
+def daily_report(db: Database, date: str,
+                 prices: Optional[PriceBook] = None) -> Dict[str, Any]:
     filters = {"date_from": date, "date_to": date}
-    return _shape("date", date, _totals(db, filters), _projects(db, filters))
+    return _shape("date", date, _totals(db, filters), _projects(db, filters),
+                  cost=_cost(db, filters, prices))
 
 
-def monthly_report(db: Database, year: int, month: int) -> Dict[str, Any]:
+def monthly_report(db: Database, year: int, month: int,
+                   prices: Optional[PriceBook] = None) -> Dict[str, Any]:
     start, end = month_bounds(year, month)
     filters = {"date_from": start, "date_to": end}
     days = {
@@ -69,10 +96,12 @@ def monthly_report(db: Database, year: int, month: int) -> Dict[str, Any]:
         "month", "%04d-%02d" % (year, month),
         _totals(db, filters), _projects(db, filters),
         {"days": days, "active_days": len(days)},
+        cost=_cost(db, filters, prices),
     )
 
 
-def yearly_report(db: Database, year: int) -> Dict[str, Any]:
+def yearly_report(db: Database, year: int,
+                  prices: Optional[PriceBook] = None) -> Dict[str, Any]:
     filters = {"date_from": "%04d-01-01" % year, "date_to": "%04d-12-31" % year}
     months: Dict[str, int] = {}
     for row in (normalise_totals(r) for r in db.by_date(filters)):
@@ -81,6 +110,7 @@ def yearly_report(db: Database, year: int) -> Dict[str, Any]:
         "year", str(year),
         _totals(db, filters), _projects(db, filters),
         {"months": dict(sorted(months.items())), "active_months": len(months)},
+        cost=_cost(db, filters, prices),
     )
 
 
@@ -98,26 +128,28 @@ def generate_all(db: Database, config: Config, only: Optional[str] = None) -> Di
     ``only`` restricts generation to ``daily``, ``monthly`` or ``yearly``.
     """
     base = Path(config.reports_dir)
+    prices = PriceBook.from_config(config)
     periods = _periods(db)
     written = {"daily": 0, "monthly": 0, "yearly": 0}
 
     if only in (None, "daily"):
         for date in periods["dates"]:
-            if write_json_atomic(base / "daily" / (date + ".json"), daily_report(db, date)):
+            if write_json_atomic(base / "daily" / (date + ".json"),
+                                 daily_report(db, date, prices)):
                 written["daily"] += 1
 
     if only in (None, "monthly"):
         for stamp in periods["months"]:
             year, month = int(stamp[:4]), int(stamp[5:7])
             if write_json_atomic(
-                base / "monthly" / (stamp + ".json"), monthly_report(db, year, month)
+                base / "monthly" / (stamp + ".json"), monthly_report(db, year, month, prices)
             ):
                 written["monthly"] += 1
 
     if only in (None, "yearly"):
         for stamp in periods["years"]:
             if write_json_atomic(
-                base / "yearly" / (stamp + ".json"), yearly_report(db, int(stamp))
+                base / "yearly" / (stamp + ".json"), yearly_report(db, int(stamp), prices)
             ):
                 written["yearly"] += 1
 

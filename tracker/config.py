@@ -23,6 +23,8 @@ side (see ``.env.example``):
     Override the dashboard bind address.
 ``CCTRACKER_TIMEZONE``
     Timezone used to bucket interactions into calendar days.
+``CCTRACKER_USD_TO_INR``
+    Exchange rate used for the dashboard's rupee figures.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .platform_utils import is_loopback_host
+from .pricing import DEFAULT_USD_TO_INR
 from .utils import read_json, set_timezone
 
 # The package lives at <root>/tracker/config.py
@@ -75,6 +78,25 @@ DEFAULTS: Dict[str, Any] = {
         "auto_refresh_seconds": 0,
         # Rows per page in the prompt history table.
         "page_size": 25,
+    },
+    "pricing": {
+        # Show cost alongside token counts. Costs are always derived at read
+        # time from the stored token counts, so turning this off (or changing a
+        # rate below) never alters recorded data.
+        "enabled": True,
+        # USD -> INR. Static by design: this tracker makes no network calls, and
+        # a rate that moved on its own would make the same data report a
+        # different figure every day. Set it to the rate you account at.
+        "usd_to_inr": 88.0,
+        # Which prompt-cache TTL to assume for cache-creation tokens. Claude
+        # Code records how many tokens were written to the cache but not the TTL
+        # they were written with, so this is an assumption, not a measurement.
+        # "5m" (1.25x input) is Claude Code's default; "1h" is 2x input.
+        "cache_write_ttl": "5m",
+        # Per-model USD-per-million overrides, merged over the built-in table:
+        #   {"my-model": {"input": 5.0, "output": 25.0}}
+        # Cache prices default to Anthropic's multipliers when omitted.
+        "model_prices": {},
     },
     "project_detection": {
         # Prefer the git repository root's directory name.
@@ -137,6 +159,13 @@ def _env_overrides() -> Dict[str, Any]:
     timezone = os.environ.get("CCTRACKER_TIMEZONE")
     if timezone:
         override["timezone"] = timezone
+
+    rate = os.environ.get("CCTRACKER_USD_TO_INR")
+    if rate:
+        try:
+            override["pricing"] = {"usd_to_inr": float(rate)}
+        except ValueError:
+            pass
 
     if paths:
         override["paths"] = paths
@@ -256,6 +285,31 @@ class Config:
         except (TypeError, ValueError):
             return 25
         return value if value in (25, 50, 100, 250) else 25
+
+    # -- pricing -----------------------------------------------------------
+    @property
+    def pricing_enabled(self) -> bool:
+        return bool(self.get("pricing", "enabled", default=True))
+
+    @property
+    def usd_to_inr(self) -> float:
+        """Exchange rate used for every rupee figure. Always positive."""
+        try:
+            rate = float(self.get("pricing", "usd_to_inr", default=DEFAULT_USD_TO_INR))
+        except (TypeError, ValueError):
+            return DEFAULT_USD_TO_INR
+        return rate if rate > 0 else DEFAULT_USD_TO_INR
+
+    @property
+    def cache_write_ttl(self) -> str:
+        value = str(self.get("pricing", "cache_write_ttl", default="5m") or "5m").lower()
+        return "1h" if value in ("1h", "60m", "hour") else "5m"
+
+    @property
+    def model_prices(self) -> Dict[str, Any]:
+        """User-supplied per-model price overrides, merged over the built-ins."""
+        value = self.get("pricing", "model_prices", default={})
+        return value if isinstance(value, dict) else {}
 
     @property
     def hook_budget_seconds(self) -> float:
